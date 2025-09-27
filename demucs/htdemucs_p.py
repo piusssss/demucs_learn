@@ -145,7 +145,7 @@ class HTDemucs(nn.Module):
             pad = True
             last_freq = False
             if freq and freqs <= kernel_size * stride**2:  #2048 512 128   32 8
-                ker = freqs
+                ker = freqs                                #8 32   128 512 2048
                 pad = False
                 last_freq = True
 
@@ -497,15 +497,13 @@ class HTDemucs(nn.Module):
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_upsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        xt = self.channel_upsampler_t(xt)
 
-                    x, xt = self.mytransformer(x, None)
+                    x, _ = self.mytransformer(x, None)
 
                     if self.bottom_channels:
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_downsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        xt = self.channel_downsampler_t(xt)
                         
             if idx == 0 and self.freq_emb is not None:
                 # add frequency embedding to allow for non equivariant convolutions
@@ -534,6 +532,23 @@ class HTDemucs(nn.Module):
                 else:
                     skip = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip, length_t)
+            
+            if idx == offset-1:
+                if self.crosstransformer:
+                    if self.bottom_channels:
+                        b, c, f, t = x.shape
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_upsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                        pre = self.channel_upsampler_t(xt)
+
+                    x, pre = self.crosstransformer(x, pre)
+
+                    if self.bottom_channels:
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_downsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                        pre = self.channel_downsampler_t(xt)
 
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0

@@ -505,8 +505,8 @@ class HDemucs(nn.Module):
 
             pad = True
             last_freq = False
-            if freq and freqs <= kernel_size:  #2048 512 128 32 8 1
-                ker = freqs                    #1 8 32 128 512 2048
+            if freq and freqs <= kernel_size:  #2048 512 128 32 8   1
+                ker = freqs                    #1   8 32 128 512 2048
                 pad = False
                 last_freq = True
 
