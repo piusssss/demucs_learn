@@ -294,40 +294,7 @@ class HTDemucs(nn.Module):
                 auto_sparsity=t_auto_sparsity,
                 cross=False,
             )
-            self.mytransformer = CrossTransformerEncoder(
-                dim=transformer_channels,
-                emb=t_emb,
-                hidden_scale=t_hidden_scale,
-                num_heads=t_heads,
-                num_layers=t_layers,
-                cross_first=t_cross_first,
-                dropout=t_dropout,
-                max_positions=t_max_positions,
-                norm_in=t_norm_in,
-                norm_in_group=t_norm_in_group,
-                group_norm=t_group_norm,
-                norm_first=t_norm_first,
-                norm_out=t_norm_out,
-                max_period=t_max_period,
-                weight_decay=t_weight_decay,
-                lr=t_lr,
-                layer_scale=t_layer_scale,
-                gelu=t_gelu,
-                sin_random_shift=t_sin_random_shift,
-                weight_pos_embed=t_weight_pos_embed,
-                cape_mean_normalize=t_cape_mean_normalize,
-                cape_augment=t_cape_augment,
-                cape_glob_loc_scale=t_cape_glob_loc_scale,
-                sparse_self_attn=t_sparse_self_attn,
-                sparse_cross_attn=t_sparse_cross_attn,
-                mask_type=t_mask_type,
-                mask_random_seed=t_mask_random_seed,
-                sparse_attn_window=t_sparse_attn_window,
-                global_window=t_global_window,
-                sparsity=t_sparsity,
-                auto_sparsity=t_auto_sparsity,
-                cross=False,
-            )
+            
             self.crosstransformer = CrossTransformerEncoder(
                 dim=transformer_channels,
                 emb=t_emb,
@@ -361,10 +328,8 @@ class HTDemucs(nn.Module):
                 sparsity=t_sparsity,
                 auto_sparsity=t_auto_sparsity,
                 cross=True,
-                cross=True,
             )
         else:
-            self.mytransformer = None
             self.mytransformer = None
             self.crosstransformer = None
 
