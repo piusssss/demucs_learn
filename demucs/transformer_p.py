@@ -672,7 +672,8 @@ class CrossTransformerEncoder(nn.Module):
                 xt = self.layers_t[idx](xt, old_x)
 
         x = rearrange(x, "b (t1 fr) c -> b c fr t1", t1=T1)
-        xt = rearrange(xt, "b t2 c -> b c t2")
+        if self.cross==True:
+            xt = rearrange(xt, "b t2 c -> b c t2")
         return x, xt
 
     def _get_pos_embedding(self, T, B, C, device):
