@@ -557,6 +557,7 @@ class CrossTransformerEncoder(nn.Module):
         global_window: int = 50,
         auto_sparsity: bool = False,
         sparsity: float = 0.95,
+        cross: bool = False,
     ):
         super().__init__()
         """
@@ -566,6 +567,7 @@ class CrossTransformerEncoder(nn.Module):
         hidden_dim = int(dim * hidden_scale)
 
         self.num_layers = num_layers
+        self.cross = cross
         # classic parity = 1 means that if idx%2 == 1 there is a
         # classical encoder else there is a cross encoder
         self.classic_parity = 1 if cross_first else 0
@@ -631,12 +633,8 @@ class CrossTransformerEncoder(nn.Module):
         })
 
         for idx in range(num_layers):
-            if idx % 2 == self.classic_parity:
-
+            if self.cross==False:
                 self.layers.append(MyTransformerEncoderLayer(**kwargs_classic_encoder))
-                self.layers_t.append(
-                    MyTransformerEncoderLayer(**kwargs_classic_encoder)
-                )
 
             else:
                 self.layers.append(CrossTransformerEncoderLayer(**kwargs_cross_encoder))
@@ -654,18 +652,20 @@ class CrossTransformerEncoder(nn.Module):
         x = rearrange(x, "b c fr t1 -> b (t1 fr) c")
         x = self.norm_in(x)
         x = x + self.weight_pos_embed * pos_emb_2d
-
-        B, C, T2 = xt.shape
-        xt = rearrange(xt, "b c t2 -> b t2 c")  # now T2, B, C
+        
         pos_emb = self._get_pos_embedding(T2, B, C, x.device)
         pos_emb = rearrange(pos_emb, "t2 b c -> b t2 c")
-        xt = self.norm_in_t(xt)
-        xt = xt + self.weight_pos_embed * pos_emb
-
+        
+        if self.cross==True:
+            B, C, T2 = xt.shape
+            xt = rearrange(xt, "b c t2 -> b t2 c")  # now T2, B, C
+            xt = self.norm_in_t(xt)
+            xt = xt + self.weight_pos_embed * pos_emb
+            
+        
         for idx in range(self.num_layers):
-            if idx % 2 == self.classic_parity:
+            if self.cross==False:
                 x = self.layers[idx](x)
-                xt = self.layers_t[idx](xt)
             else:
                 old_x = x
                 x = self.layers[idx](x, xt)

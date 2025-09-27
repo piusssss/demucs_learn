@@ -23,7 +23,7 @@ class HTDemucs(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=48,
+        channels=32,
         channels_time=None,
         growth=2,
         # STFT
@@ -33,7 +33,7 @@ class HTDemucs(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=4,
+        depth=5,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -58,7 +58,7 @@ class HTDemucs(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers=5,
+        t_layers=3,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -93,7 +93,7 @@ class HTDemucs(nn.Module):
         rescale=0.1,
         # Metadata
         samplerate=44100,
-        segment=10,
+        segment=8,
         use_train_segment=True,
     ):
 
@@ -134,7 +134,7 @@ class HTDemucs(nn.Module):
 
         for index in range(depth):
             norm = index >= norm_starts
-            freq = freqs > 1
+            freq = freqs > kernel_size * stride
             stri = stride
             ker = kernel_size
             if not freq:
@@ -144,7 +144,7 @@ class HTDemucs(nn.Module):
 
             pad = True
             last_freq = False
-            if freq and freqs <= kernel_size:
+            if freq and freqs <= kernel_size * stride**2:  #2048 512 128   32 8
                 ker = freqs
                 pad = False
                 last_freq = True
