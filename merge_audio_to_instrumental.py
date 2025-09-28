@@ -116,7 +116,7 @@ def merge_audio_files(directory_path):
 def main():
     """主函数"""
     # 设置基础路径
-    base_path = r"data\instrumental_separation\test"
+    base_path = r"data\instrumental\train"
     
     # 检查基础路径是否存在
     if not os.path.exists(base_path):

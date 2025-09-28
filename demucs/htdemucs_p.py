@@ -143,7 +143,7 @@ class HTDemucs(nn.Module):
                 stri = time_stride
 
             pad = True
-            last_freq = False
+            last_freq = False                              #4 32 64 128 256
             if freq and freqs <= kernel_size * stride**2:  #2048 512 128   32 8
                 ker = freqs                                #8 32   128 512 2048
                 pad = False
@@ -242,7 +242,7 @@ class HTDemucs(nn.Module):
         if rescale:
             rescale_module(self, reference=rescale)
 
-        transformer_channels = channels * growth ** (depth - 1)
+        transformer_channels = channels * growth ** (depth - 3)
         if bottom_channels:
             self.channel_upsampler = nn.Conv1d(
                 transformer_channels, bottom_channels, 1
@@ -541,7 +541,7 @@ class HTDemucs(nn.Module):
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_upsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        pre = self.channel_upsampler_t(xt)
+                        pre = self.channel_upsampler_t(pre)
 
                     x, pre = self.crosstransformer(x, pre)
 
@@ -549,7 +549,7 @@ class HTDemucs(nn.Module):
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_downsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        pre = self.channel_downsampler_t(xt)
+                        pre = self.channel_downsampler_t(pre)
 
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
