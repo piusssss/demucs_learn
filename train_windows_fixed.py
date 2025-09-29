@@ -21,7 +21,7 @@ print("Windows修复...")
 # 修复已经直接在repitch.py中实现，无需额外导入
 
 # 硬编码种子 114
-SEED = 121
+SEED = 122
 
 # 启动训练
 if __name__ == "__main__":

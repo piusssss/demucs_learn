@@ -23,7 +23,7 @@ class HTDemucs_p(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=32,
+        channels=40,
         channels_time=None,
         growth=2,
         # STFT
@@ -58,7 +58,7 @@ class HTDemucs_p(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers=4,
+        t_layers=5,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -300,7 +300,7 @@ class HTDemucs_p(nn.Module):
                 emb=t_emb,
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
-                num_layers=1,
+                num_layers=4,
                 cross_first=t_cross_first,
                 dropout=t_dropout,
                 max_positions=t_max_positions,
