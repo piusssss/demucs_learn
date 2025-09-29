@@ -25,6 +25,7 @@ from .wav import get_wav_datasets, get_musdb_wav_datasets
 from .demucs import Demucs
 from .hdemucs import HDemucs
 from .htdemucs import HTDemucs
+from .htdemucs_p import HTDemucs_p
 from .repitch import RepitchedWrapper
 from .solver import Solver
 from .states import capture_init
@@ -65,6 +66,7 @@ def get_model(args):
         'demucs': Demucs,
         'hdemucs': HDemucs,
         'htdemucs': HTDemucs,
+        'htdemucs_p': HTDemucs_p,
         'torch_hdemucs': TorchHDemucsWrapper,
     }[args.model]
     kw = OmegaConf.to_container(getattr(args, args.model), resolve=True)
@@ -219,7 +221,7 @@ def get_solver_from_sig(sig, model_only=False):
         return get_solver(xp.cfg, model_only)
 
 
-@hydra_main(config_path="../conf", config_name="my_train", version_base="1.1")
+@hydra_main(config_path="../conf", config_name="new_train", version_base="1.1")
 def main(args):
     global __file__
     __file__ = hydra.utils.to_absolute_path(__file__)

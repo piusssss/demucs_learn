@@ -644,6 +644,8 @@ class CrossTransformerEncoder(nn.Module):
                 )
 
     def forward(self, x, xt):
+        if x.dim() == 3:
+            x = x.unsqueeze(2)  # Insert a dimension of size 1 at index 2 (Fr dimension)
         B, C, Fr, T1 = x.shape
         pos_emb_2d = create_2d_sin_embedding(
             C, Fr, T1, x.device, self.max_period
@@ -653,12 +655,13 @@ class CrossTransformerEncoder(nn.Module):
         x = self.norm_in(x)
         x = x + self.weight_pos_embed * pos_emb_2d
         
-        pos_emb = self._get_pos_embedding(T2, B, C, x.device)
-        pos_emb = rearrange(pos_emb, "t2 b c -> b t2 c")
+        
         
         if self.cross==True:
             B, C, T2 = xt.shape
             xt = rearrange(xt, "b c t2 -> b t2 c")  # now T2, B, C
+            pos_emb = self._get_pos_embedding(T2, B, C, x.device)
+            pos_emb = rearrange(pos_emb, "t2 b c -> b t2 c")
             xt = self.norm_in_t(xt)
             xt = xt + self.weight_pos_embed * pos_emb
             

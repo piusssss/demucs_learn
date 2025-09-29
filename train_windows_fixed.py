@@ -17,17 +17,17 @@ import dora.utils
 dora.utils.write_and_rename = windows_safe_write_and_rename
 
 # 应用Windows变调增强修复
-print("🔧 应用Windows修复...")
+print("Windows修复...")
 # 修复已经直接在repitch.py中实现，无需额外导入
 
-# 硬编码种子
-SEED = 114
+# 硬编码种子 114
+SEED = 121
 
 # 启动训练
 if __name__ == "__main__":
     # 添加硬编码的种子参数
     sys.argv = [sys.argv[0]] + [f"seed={SEED}"] + sys.argv[1:]
-    print(f"🎲 使用硬编码随机种子: {SEED}")
+    print(f"随机种子: {SEED}")
     
     from demucs.train import main
     main()

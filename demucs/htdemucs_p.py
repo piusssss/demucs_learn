@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from fractions import Fraction
 from einops import rearrange
 
-from .transformer import CrossTransformerEncoder
+from .transformer_p import CrossTransformerEncoder
 
 from .demucs import rescale_module
 from .states import capture_init
@@ -15,7 +15,7 @@ from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
-class HTDemucs(nn.Module):
+class HTDemucs_p(nn.Module):
 
     @capture_init
     def __init__(
@@ -33,7 +33,7 @@ class HTDemucs(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=5,
+        depth=6,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -58,7 +58,7 @@ class HTDemucs(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers=3,
+        t_layers=4,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -134,7 +134,7 @@ class HTDemucs(nn.Module):
 
         for index in range(depth):
             norm = index >= norm_starts
-            freq = freqs > kernel_size * stride
+            freq = freqs > 1
             stri = stride
             ker = kernel_size
             if not freq:
@@ -143,9 +143,9 @@ class HTDemucs(nn.Module):
                 stri = time_stride
 
             pad = True
-            last_freq = False                              #4 32 64 128 256
-            if freq and freqs <= kernel_size * stride**2:  #2048 512 128   32 8
-                ker = freqs                                #8 32   128 512 2048
+            last_freq = False
+            if freq and freqs <= kernel_size:  #2048 512 128 32 8   1
+                ker = freqs                    #1   8 32 128 512 2048
                 pad = False
                 last_freq = True
 
@@ -242,7 +242,7 @@ class HTDemucs(nn.Module):
         if rescale:
             rescale_module(self, reference=rescale)
 
-        transformer_channels = channels * growth ** (depth - 3)
+        transformer_channels = channels * growth ** (depth - 2)
         if bottom_channels:
             self.channel_upsampler = nn.Conv1d(
                 transformer_channels, bottom_channels, 1
@@ -296,11 +296,11 @@ class HTDemucs(nn.Module):
             )
             
             self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels,
+                dim=transformer_channels//(growth**2),
                 emb=t_emb,
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
-                num_layers=t_layers,
+                num_layers=1,
                 cross_first=t_cross_first,
                 dropout=t_dropout,
                 max_positions=t_max_positions,
@@ -490,7 +490,7 @@ class HTDemucs(nn.Module):
                     # branches have the same shape and can be merged.
                     inject = xt
             x = encode(x, inject)
-            
+            #print(f"Debug - {idx}   inject.shape: {x.shape}, y.shape: {xt.shape}")
             if idx == len(self.tencoder)-1:
                 if self.mytransformer:
                     if self.bottom_channels:
@@ -505,6 +505,23 @@ class HTDemucs(nn.Module):
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_downsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
+            
+            if idx == 2:
+                if self.crosstransformer:
+                    if self.bottom_channels:
+                        b, c, f, t = x.shape
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_upsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                        xt = self.channel_upsampler_t(xt)
+
+                    x, xt = self.crosstransformer(x, xt)
+
+                    if self.bottom_channels:
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_downsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                        xt = self.channel_downsampler_t(xt)
                         
             if idx == 0 and self.freq_emb is not None:
                 # add frequency embedding to allow for non equivariant convolutions
@@ -534,22 +551,37 @@ class HTDemucs(nn.Module):
                     skip = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip, length_t)
             
-            if idx == offset-1:
+            if idx == 0:
+                if self.mytransformer:
+                    if self.bottom_channels:
+                        b, c, f, t = x.shape
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_upsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+
+                    x, _ = self.mytransformer(x, None)
+
+                    if self.bottom_channels:
+                        x = rearrange(x, "b c f t-> b c (f t)")
+                        x = self.channel_downsampler(x)
+                        x = rearrange(x, "b c (f t)-> b c f t", f=f)
+            
+            if idx == 2:
                 if self.crosstransformer:
                     if self.bottom_channels:
                         b, c, f, t = x.shape
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_upsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        pre = self.channel_upsampler_t(pre)
+                        xt = self.channel_upsampler_t(xt)
 
-                    x, pre = self.crosstransformer(x, pre)
+                    x, xt = self.crosstransformer(x, xt)
 
                     if self.bottom_channels:
                         x = rearrange(x, "b c f t-> b c (f t)")
                         x = self.channel_downsampler(x)
                         x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                        pre = self.channel_downsampler_t(pre)
+                        xt = self.channel_downsampler_t(xt)
 
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
