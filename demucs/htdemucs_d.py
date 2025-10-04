@@ -23,12 +23,12 @@ class HTDemucs_d(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=84,
+        channels=80,
         channels_time=None,
         growth=2,
         layers_1=1,
         layers_2=3,
-        layers_3=6,
+        layers_3=5,
         # STFT
         nfft=8192,
         wiener_iters=0,
@@ -36,7 +36,7 @@ class HTDemucs_d(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=8,
+        depth=7,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -63,9 +63,9 @@ class HTDemucs_d(nn.Module):
         # Transformer
         t_layers_1=2,
         t_layers_2=2,
-        t_layers=2,
+        t_layers=3,
         t_emb="sin",
-        t_hidden_scale=6.0,
+        t_hidden_scale=2.0,
         t_heads_1=8,
         t_heads_2=8,
         t_heads=16,
@@ -100,7 +100,7 @@ class HTDemucs_d(nn.Module):
         rescale=0.2,
         # Metadata
         samplerate=44100,
-        segment=10,
+        segment=4,
         use_train_segment=True,
     ):
 
@@ -157,6 +157,8 @@ class HTDemucs_d(nn.Module):
                 stri = int(stri // 2)
             if index >= layers_2:
                 growth = 1
+                if index == layers_3 - 1:
+                    growth =2
                 ker = int(ker // 2)
                 stri = int(stri // 2)
             if index >= layers_3:
@@ -354,7 +356,7 @@ class HTDemucs_d(nn.Module):
             
         if t_layers > 0:
             self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels * 2,
+                dim=transformer_channels * 4,
                 emb=t_emb,
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
@@ -531,7 +533,7 @@ class HTDemucs_d(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
-            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -612,7 +614,7 @@ class HTDemucs_d(nn.Module):
             xt = alpha_time * xt + (1 - alpha_time) * residual_xt
 
         for idx, decode in enumerate(self.decoder):
-            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
             # `pre` contains the output just before final transposed convolution,

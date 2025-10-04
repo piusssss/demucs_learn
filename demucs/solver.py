@@ -189,6 +189,11 @@ class Solver(object):
                 if formatted:
                     logger.info(bold(f"Test Summary | Epoch {epoch + 1} | {_summary(formatted)}"))
 
+        # Print current learning rate at the start of training
+        if len(self.history) < self.args.epochs:
+            current_lr = self.optimizer.param_groups[0]['lr']
+            logger.info(f"Current Epoch Learning Rate: {current_lr:.2e}")
+        
         epoch = 0
         for epoch in range(len(self.history), self.args.epochs):
             # Train one epoch

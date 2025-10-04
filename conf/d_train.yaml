@@ -15,9 +15,9 @@ dset:
   musdb_samplerate: 44100                      # MUSDB 数据集的原始采样率。
   use_musdb: false                            # 不使用MUSDB数据集
   musdb_path: null                            # 明确设置MUSDB路径为null
-  wav: E:/CODE/python_code/inst/demucs/data/instrumental          # 你的自定义WAV训练集路径
+  wav: E:/CODE/python_code/inst/demucs/data/test          # 你的自定义WAV训练集路径
   wav2: false                                  # 第二个自定义 WAV 训练集的根目录路径。
-  segment: 8                                   # 
+  segment: 4                                   # 
   shift: 1                                     # 移位。
   train_valid: false                           # 是否从训练集中切分一部分作为验证集。
   full_cv: false                               # 是否使用完整的交叉验证数据。
@@ -30,14 +30,14 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 27              # 训练总轮次：回到成功配置，给更多训练时间
-batch_size: 2           # 批大小：保持不变
+epochs: 3              # 训练总轮次：回到成功配置，给更多训练时间
+batch_size: 3           # 批大小：保持不变
 max_batches:        # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
 # 定义了如何根据损失来更新模型权重。
 optim:
-  lr: 3e-4           # 学习率
+  lr: 8e-4           # 学习率
   momentum: 0.85       # 动量 (Momentum)：Adam 优化器的参数之一。
   beta2: 0.995        # Adam 优化器的参数之二。
   loss: l1            # 损失函数：'l1' (绝对值误差) 在音频领域常用，'mse' (均方误差) 是另一个选项。
@@ -78,7 +78,7 @@ continue_opt: false     # 是否同时加载优化器的状态。对于微调，
 # --- 其他杂项配置 ---
 misc:
   num_workers: 0      # 数据加载时使用的 CPU 进程数，设为0避免多进程问题
-  num_prints: 100       # 每个 epoch 打印多少次训练信息，减少到2
+  num_prints: 10       # 每个 epoch 打印多少次训练信息，减少到2
   show: false         # 是否显示图谱等可视化信息（需要图形界面）。
   verbose: false      # 是否打印更详细的日志。
 
@@ -90,18 +90,18 @@ ema:
   batch: []       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
 
 use_train_segment: true  # (待移除的旧参数)
-model_segment: 10        # 覆盖模型的分段参数，4秒 * 4 = 16秒
+model_segment: 4        
 model: htdemucs_d          # 使用HTDemucs模型
 
 # --- Hybrid Transformer Demucs (HTDemucs_d) 模型配置 ---
 htdemucs_d:
   # --- 卷积部分 (U-Net) ---
-  channels: 32          # 基础通道数
+  channels: 80          # 基础通道数
   channels_time:        # 时域分支通道数。
   growth: 2             # 通道增长率。
   layers_1: 1           # 第一阶段层数
   layers_2: 3           # 第二阶段层数  
-  layers_3: 6           # 第三阶段层数
+  layers_3: 5           # 第三阶段层数
   # STFT
   nfft: 8192            # STFT 窗口大小。
   wiener_iters: 0       # 维纳滤波迭代次数。
@@ -109,7 +109,7 @@ htdemucs_d:
   wiener_residual: false# 对残差进行维纳滤波。
   cac: true             # Complex as Channels 技术。
   # Main structure
-  depth: 8              # U-Net深度
+  depth: 7              # U-Net深度
   rewrite: true         # 使用重写的高效实现。
   # Frequency Branch
   multi_freqs: []       # 多频率分辨率列表。
@@ -135,16 +135,16 @@ htdemucs_d:
   bottom_channels: 0    # Transformer 前置层的通道数。0 表示与上一层相同。
   # --- 多层 Transformer 配置 ---
   # ------ Transformer 1 (早期特征增强) ------
-  t_layers_1: 3         # 第一个Transformer层数
+  t_layers_1: 2         # 第一个Transformer层数
   t_heads_1: 8          # 第一个Transformer注意力头数
   # ------ Transformer 2 (深层特征提取) ------
-  t_layers_2: 3         # 第二个Transformer层数
+  t_layers_2: 2         # 第二个Transformer层数
   t_heads_2: 8          # 第二个Transformer注意力头数
   # ------ Cross Transformer (跨模态融合) ------
-  t_layers: 5           # 跨模态Transformer层数
+  t_layers: 3           # 跨模态Transformer层数
   t_heads: 16           # 跨模态Transformer注意力头数
   # ------ 通用Transformer参数 ------
-  t_hidden_scale: 6.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
+  t_hidden_scale: 2.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
   t_dropout: 0.0        # Transformer dropout
   t_layer_scale: True   # 是否使用 LayerScale 技术来稳定训练。
   t_gelu: True          # 是否使用 GELU 激活函数。

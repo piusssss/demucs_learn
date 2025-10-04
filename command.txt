@@ -6,7 +6,7 @@ demucs -n htdemucs_ft --shifts=3 --two-stems vocals --overlap 0.25  .wav
 
 demucs --repo ./release_models -n 3fba3fc3 --shifts=5 --overlap 0.25 bilibili/.wav
 
-demucs --repo ./release_models -n f7f4fca5 --shifts=5 --overlap 0.25 bilibili/.wav
+demucs --repo ./release_models -n 406938b4 --shifts=5 --overlap 0.25 music/back.wav
 
-python -m tools.export f7f4fca5
+python -m tools.export 406938b4
 

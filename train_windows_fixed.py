@@ -2,7 +2,7 @@
 """
 Windows兼容的训练启动脚本
 解决文件写入冲突问题
-硬编码种子参数
+硬编码种子参数.
 """
 
 import sys
@@ -18,7 +18,7 @@ dora.utils.write_and_rename = windows_safe_write_and_rename
 
 print("Windows修复...")
 
-SEED = 152
+SEED = 153
 
 # 启动训练
 if __name__ == "__main__":
