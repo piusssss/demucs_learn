@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from fractions import Fraction
 from einops import rearrange
 
-from .transformer_d import CrossTransformerEncoder
+from .transformer_d2 import CrossTransformerEncoder
 
 from .demucs import rescale_module
 from .states import capture_init
@@ -15,7 +15,7 @@ from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
-class HTDemucs_d(nn.Module):
+class HTDemucs_d2(nn.Module):
 
     @capture_init
     def __init__(
@@ -23,7 +23,7 @@ class HTDemucs_d(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=84,
+        channels=56,
         channels_time=None,
         growth=2,
         layers_1=1,
@@ -45,7 +45,7 @@ class HTDemucs_d(nn.Module):
         emb_scale=10,
         emb_smooth=True,
         # Convolutions
-        kernel_size=16,
+        kernel_size=48,
         time_stride=8,
         stride=8,
         context=1,
@@ -61,11 +61,11 @@ class HTDemucs_d(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers_1=3,
-        t_layers_2=3,
+        t_layers_1=5,
+        t_layers_2=5,
         t_layers=5,
         t_emb="sin",
-        t_hidden_scale=4,
+        t_hidden_scale=5.0,
         t_heads_1=8,
         t_heads_2=8,
         t_heads=16,
@@ -533,7 +533,7 @@ class HTDemucs_d(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -614,7 +614,7 @@ class HTDemucs_d(nn.Module):
             xt = alpha_time * xt + (1 - alpha_time) * residual_xt
 
         for idx, decode in enumerate(self.decoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
             # `pre` contains the output just before final transposed convolution,

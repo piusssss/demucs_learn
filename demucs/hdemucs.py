@@ -92,7 +92,7 @@ class HEncLayer(nn.Module):
         if norm:
             norm_fn = lambda d: nn.GroupNorm(norm_groups, d)  # noqa
         if pad:
-            pad = kernel_size // 4
+            pad = (kernel_size - stride) // 2
         else:
             pad = 0
         klass = nn.Conv1d
@@ -265,7 +265,7 @@ class HDecLayer(nn.Module):
         if norm:
             norm_fn = lambda d: nn.GroupNorm(norm_groups, d)  # noqa
         if pad:
-            pad = kernel_size // 4
+            pad = (kernel_size - stride) // 2
         else:
             pad = 0
         self.pad = pad

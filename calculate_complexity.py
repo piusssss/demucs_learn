@@ -3,6 +3,7 @@ from demucs.htdemucs_p import HTDemucs_p
 from demucs.htdemucs_i import HTDemucs_i
 from demucs.htdemucs_s import HTDemucs_s
 from demucs.htdemucs_d import HTDemucs_d
+from demucs.htdemucs_d2 import HTDemucs_d2
 from demucs.htdemucs import HTDemucs
 from thop import profile
 
@@ -11,7 +12,7 @@ samplerate = 44100
 segment = 10
 
 # Instantiate the model with correct parameters
-model = HTDemucs_d(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate, segment=segment)
+model = HTDemucs_d2(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate, segment=segment)
 
 # Create a dummy input tensor
 # The input to the model is a mix of audio, typically (batch_size, audio_channels, length)
