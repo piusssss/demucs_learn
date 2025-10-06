@@ -23,7 +23,7 @@ class HTDemucs_d2(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=56,
+        channels=64,
         channels_time=None,
         growth=2,
         layers_1=1,
@@ -36,7 +36,7 @@ class HTDemucs_d2(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=6,
+        depth=8,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -51,7 +51,7 @@ class HTDemucs_d2(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=99,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
@@ -61,11 +61,11 @@ class HTDemucs_d2(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers_1=5,
-        t_layers_2=5,
-        t_layers=5,
+        t_layers_1=0,
+        t_layers_2=0,
+        t_layers=0,
         t_emb="sin",
-        t_hidden_scale=5.0,
+        t_hidden_scale=4.0,
         t_heads_1=8,
         t_heads_2=8,
         t_heads=16,
@@ -164,7 +164,7 @@ class HTDemucs_d2(nn.Module):
             if index >= layers_3:
                 growth = 2
                 ker = int(ker // 2)
-                stri = int(stri // 2)  
+                #stri = int(stri // 2)  
              
             kw = {
                 "kernel_size": ker,
@@ -284,7 +284,7 @@ class HTDemucs_d2(nn.Module):
             self.mytransformer_1 = CrossTransformerEncoder(
                 dim=transformer_channels,
                 emb=t_emb,
-                hidden_scale=t_hidden_scale,
+                hidden_scale=t_hidden_scale * 2,
                 num_heads=t_heads_1,
                 num_layers=t_layers_1,
                 cross_first=t_cross_first,
@@ -321,7 +321,7 @@ class HTDemucs_d2(nn.Module):
             self.mytransformer_2 = CrossTransformerEncoder(
                 dim=transformer_channels,
                 emb=t_emb,
-                hidden_scale=t_hidden_scale,
+                hidden_scale=t_hidden_scale * 2,
                 num_heads=t_heads_2,
                 num_layers=t_layers_2,
                 cross_first=t_cross_first,
@@ -356,7 +356,7 @@ class HTDemucs_d2(nn.Module):
             
         if t_layers > 0:
             self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels * 2,
+                dim=transformer_channels * 8,
                 emb=t_emb,
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
@@ -552,7 +552,7 @@ class HTDemucs_d2(nn.Module):
             
             x = encode(x, inject)
             
-            if self.mytransformer_1 and idx == self.layers_2:
+            if self.mytransformer_1 and idx == self.layers_2+1:
 
                 residual_x = x
                 residual_xt = xt
@@ -632,7 +632,7 @@ class HTDemucs_d2(nn.Module):
                     skip = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip, length_t)
 
-            if self.mytransformer_2 and idx == self.depth - 2 - self.layers_2:
+            if self.mytransformer_2 and idx == self.depth - 3 - self.layers_2:
 
                 residual_x = x
                 residual_xt = xt

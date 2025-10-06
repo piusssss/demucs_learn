@@ -30,8 +30,8 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 5              # 训练总轮次：回到成功配置，给更多训练时间
-batch_size: 2           # 批大小：保持不变
+epochs: 9              # 训练总轮次：回到成功配置，给更多训练时间
+batch_size: 3           # 批大小：保持不变
 max_batches:        # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
@@ -64,7 +64,7 @@ augment:
     proba: 0          # 禁用remix增强，因为我们是单轨分离
     group_size: 4     # 每次从 4 首不同的歌里随机抽取音轨来混合。
   scale:              # 音量缩放增强。
-    proba: 0        # 90% 的概率应用此增强。
+    proba: 0.1        # 90% 的概率应用此增强。
     min: 0.3          # 最小缩放到原音量的 0.5 倍。
     max: 1.5          # 最大放大到原音量的 1.5 倍。
   flip: true          # 随机进行左右声道翻转增强。
@@ -97,7 +97,7 @@ model: htdemucs_d2          # 使用HTDemucs模型
 # --- Hybrid Transformer Demucs (HTDemucs_d) 模型配置 ---
 htdemucs_d2:
   # --- 卷积部分 (U-Net) ---
-  channels: 56          # 基础通道数
+  channels: 64          # 基础通道数
   channels_time:        # 时域分支通道数。
   growth: 2             # 通道增长率。
   layers_1: 1           # 第一阶段层数
@@ -107,10 +107,10 @@ htdemucs_d2:
   nfft: 8192            # STFT 窗口大小。
   wiener_iters: 0       # 维纳滤波迭代次数。
   end_iters: 0          # 结束时额外迭代次数。
-  wiener_residual: false # 对残差进行维纳滤波。
+  wiener_residual: false  # 对残差进行维纳滤波。
   cac: true             # Complex as Channels 技术。
   # Main structure
-  depth: 6              # U-Net深度
+  depth: 8              # U-Net深度
   rewrite: true         # 使用重写的高效实现。
   # Frequency Branch
   multi_freqs: []       # 多频率分辨率列表。
@@ -125,7 +125,7 @@ htdemucs_d2:
   context: 1            # 卷积上下文。
   context_enc: 0        # 编码器上下文。
   # normalization
-  norm_starts: 99        # 开始归一化的层。
+  norm_starts: 4        # 开始归一化的层。
   norm_groups: 4        # 归一化组数。
   # DConv residual branch
   dconv_mode: 1         # DConv 模式。
@@ -136,16 +136,16 @@ htdemucs_d2:
   bottom_channels: 0    # Transformer 前置层的通道数。0 表示与上一层相同。
   # --- 多层 Transformer 配置 ---
   # ------ Transformer 1 (早期特征增强) ------
-  t_layers_1: 5         # 第一个Transformer层数
+  t_layers_1: 0         # 第一个Transformer层数
   t_heads_1: 8          # 第一个Transformer注意力头数
   # ------ Transformer 2 (深层特征提取) ------
-  t_layers_2: 5         # 第二个Transformer层数
+  t_layers_2: 0         # 第二个Transformer层数
   t_heads_2: 8          # 第二个Transformer注意力头数
   # ------ Cross Transformer (跨模态融合) ------
-  t_layers: 5           # 跨模态Transformer层数
+  t_layers: 0           # 跨模态Transformer层数
   t_heads: 16           # 跨模态Transformer注意力头数
   # ------ 通用Transformer参数 ------
-  t_hidden_scale: 5.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
+  t_hidden_scale: 2.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
   t_dropout: 0.0        # Transformer dropout
   t_layer_scale: True   # 是否使用 LayerScale 技术来稳定训练。
   t_gelu: True          # 是否使用 GELU 激活函数。

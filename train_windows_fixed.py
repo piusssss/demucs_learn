@@ -18,7 +18,7 @@ dora.utils.write_and_rename = windows_safe_write_and_rename
 
 print("Windows修复...")
 
-SEED = 156
+SEED = 157
 
 # 启动训练
 if __name__ == "__main__":
