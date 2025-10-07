@@ -1,5 +1,3 @@
-# Hydra 配置组合：决定了最终配置是如何由多个文件组合而成的。
-# 这是一个"默认套餐"，程序会先加载这里的设置，然后可以用命令行参数覆盖它们。
 defaults:
   - _self_                                    # 首先加载当前文件（config.yaml）中的所有设置。
   - dset: musdb44                             # 然后加载 `conf/dset/musdb44.yaml` 文件，用它的内容覆盖数据集（dset）相关的默认值。
@@ -17,10 +15,10 @@ dset:
   musdb_samplerate: 44100                      # MUSDB 数据集的原始采样率。
   use_musdb: false                            # 不使用MUSDB数据集
   musdb_path: null                            # 明确设置MUSDB路径为null
-  wav: E:/CODE/python_code/inst/demucs/data/test          # 你的自定义WAV训练集路径
+  wav: E:/CODE/python_code/inst/demucs/data/test         # 你的自定义WAV训练集路径
   wav2: false                                  # 第二个自定义 WAV 训练集的根目录路径。
-  segment: 4                                   # 与HTDemucs_i默认配置一致
-  shift:   1                                   # 训练时，位移。
+  segment: 4                                   # 保持4秒分段，平衡性能和内存使用
+  shift: 1                                     # 训练时，对每个片段做多少次随机移位（shift）的数据增强。
   train_valid: false                           # 是否从训练集中切分一部分作为验证集。
   full_cv: false                               # 是否使用完整的交叉验证数据。
   samplerate: 44100                           # 训练过程中统一使用的采样率 (会自动重采样)。
@@ -32,14 +30,14 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 2              # 训练总轮次：回到成功配置，给更多训练时间   nsdr 12.265
-batch_size: 2           # 批大小：保持不变
+epochs: 4              # 训练总轮次：回到成功配置，给更多训练时间   nsdr 14.574
+batch_size: 1           # 批大小：保持不变
 max_batches:        # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
 # 定义了如何根据损失来更新模型权重。
 optim:
-  lr: 8e-4           # 学习率
+  lr: 5e-4           # 学习率
   momentum: 0.8       # 动量 (Momentum)：Adam 优化器的参数之一。
   beta2: 0.995        # Adam 优化器的参数之二。
   loss: l1            # 损失函数：'l1' (绝对值误差) 在音频领域常用，'mse' (均方误差) 是另一个选项。
@@ -47,28 +45,19 @@ optim:
   weight_decay: 0  # 权重衰减：一种正则化手段，用于防止模型过拟合。
   clip_grad: 0        # 梯度裁剪阈值：防止梯度爆炸。0 表示不启用。
 
-seed: 45              # 随机种子：固定这个值可以确保每次实验的结果都可以复现。
-debug: false          # 调试模式开关。
-valid_apply: true     # 是否在验证时应用模型。
-flag:                 # 一个空的标志位，可用于在命令行中传递自定义标志。
-save_every:           # 每隔多少个 epoch 保存一次模型，而不是只保存最好的。
-weights: [1.0]   # 训练/验证损失中，每个音轨所占的权重。只关心instrumental
-
-# --- 数据增强 (Data Augmentation) 配置 ---
-# 在训练时通过各种变换"创造"新数据，是提升模型泛化能力的关键。
 augment:
   shift_same: true   # 对同一首歌的不同音轨，是否应用完全相同的随机时移。
   repitch:            # 变调/变速增强。
     proba: 0        # 恢复repitch增强
-    max_pitch: 1
-    max_tempo: 1     # 节拍变化的最大范围。
+    max_pitch: 2
+    max_tempo: 2     # 节拍变化的最大范围。
   remix:              # 音轨混合增强：将不同歌曲的音轨混合在一起，创造新的训练样本。
     proba: 0          # 禁用remix增强，因为我们是单轨分离
     group_size: 4     # 每次从 4 首不同的歌里随机抽取音轨来混合。
   scale:              # 音量缩放增强。
     proba: 0        # 90% 的概率应用此增强。
-    min: 0.3          # 最小缩放到原音量的 0.5 倍。
-    max: 1.5          # 最大放大到原音量的 1.5 倍。
+    min: 0.25          # 最小缩放到原音量的 0.5 倍。
+    max: 1.75          # 最大放大到原音量的 1.5 倍。
   flip: true          # 随机进行左右声道翻转增强。
 
 # --- 继续训练 / 微调 (Finetuning) 配置 ---
@@ -93,22 +82,22 @@ ema:
   batch: []       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
 
 use_train_segment: true  # (待移除的旧参数)
-model_segment:         # 覆盖模型的分段参数，4秒 * 4 = 16秒
-model: htdemucs_i        # 使用改进版HTDemucs模型
+model_segment: 4        # 覆盖模型的分段参数，4秒 * 4 = 16秒
+model: htdemucs_c          # 使用HTDemucs模型
 
-htdemucs_i:
+htdemucs_c:
   # --- 卷积部分 (U-Net) ---
-  channels: 148          # 与HTDemucs_i默认配置一致
+  channels: 64          # 基础通道数。
   channels_time:        # 时域分支通道数。
   growth: 2             # 通道增长率。
   # STFT
   nfft: 8192            # STFT 窗口大小。
   wiener_iters: 0       # 维纳滤波迭代次数。
   end_iters: 0          # 结束时额外迭代次数。
-  wiener_residual: false  # 对残差进行维纳滤波。
+  wiener_residual: false# 对残差进行维纳滤波。
   cac: true             # Complex as Channels 技术。
   # Main structure
-  depth: 6              # 减少U-Net深度
+  depth: 3              # U-Net 深度。
   rewrite: true         # 使用重写的高效实现。
   # Frequency Branch
   multi_freqs: []       # 多频率分辨率列表。
@@ -118,35 +107,31 @@ htdemucs_i:
   emb_smooth: true      # 平滑嵌入。
   # Convolutions
   kernel_size: 16        # 卷积核大小。
-  stride: 8             # 卷积步长。
-  time_stride: 1        # 时域步长。
+  stride: 4             # 卷积步长。
+  time_stride: 2        # 时域步长。
   context: 1            # 卷积上下文。
   context_enc: 0        # 编码器上下文。
   # normalization
-  norm_starts: 2        # 开始归一化的层。
-  norm_groups: 4        # 与HTDemucs_i默认配置一致
+  norm_starts: 4        # 开始归一化的层。
+  norm_groups: 4        # 归一化组数。
   # DConv residual branch
   dconv_mode: 1         # DConv 模式。
-  dconv_depth: 3        # DConv 深度。
-  dconv_comp: 8         # 回到成功配置的DConv压缩率
-  dconv_init: 5e-2      # DConv 初始化系数。
+  dconv_depth: 2        # DConv 深度。
+  dconv_comp: 8         # DConv 压缩率。
+  dconv_init: 1e-3      # DConv 初始化系数。
   # Before the Transformer
   bottom_channels: 0    # Transformer 前置层的通道数。0 表示与上一层相同。
   # --- 跨流 Transformer (Cross-Transformer) 部分 ---
   # ------ Common to all (通用参数) ------
-  t_cross_layers_en: 2
-  t_layers_en: 2
-  t_layers_de: 2
-  t_cross_layers_de: 2
-  t_hidden_scale: 2.0     # 与HTDemucs_i默认配置一致
-  t_heads_1: 8            # 与HTDemucs_i默认配置一致
-  t_heads_2: 16           # 与HTDemucs_i默认配置一致
-  t_dropout: 0      # 适度dropout防止过拟合
+  t_layers: 0           # Transformer Encoder 的层数。
+  t_hidden_scale: 4.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
+  t_heads: 8            # 多头注意力机制 (Multi-Head Attention) 的头数。
+  t_dropout: 0.0        # Transformer 中的 Dropout 概率。
   t_layer_scale: True   # 是否使用 LayerScale 技术来稳定训练。
   t_gelu: True          # 是否使用 GELU 激活函数。
   # ------------- Positional Embedding (位置编码) -------------
   t_emb: sin            # 位置编码的方式, 'sin' 表示经典的 sin/cos 编码。
-  t_max_positions: 1000 # 与HTDemucs_i默认配置一致
+  t_max_positions: 10000 # 缩放位置编码的最大位置。
   t_max_period: 10000.0 # sin/cos 编码的最大周期。
   t_weight_pos_embed: 1.0 # 位置编码的权重。
   t_cape_mean_normalize: True # 是否对 CAPE (Conditional Absolute Position Embeddings) 进行均值归一化。
@@ -155,7 +140,7 @@ htdemucs_i:
   t_sin_random_shift: 0     # 对 sin 位置编码进行随机移位的数量。
   # ------------- norm before a transformer encoder (Encoder 前的归一化) -------------
   t_norm_in: True       # 是否在 Transformer Encoder 输入前进行归一化。
-  t_norm_in_group: False  # 是否使用 Group Norm。
+  t_norm_in_group: False# 是否使用 Group Norm。
   # ------------- norm inside the encoder (Encoder 内部的归一化) -------------
   t_group_norm: False   # 是否使用 Group Norm。
   t_norm_first: True    # 是否使用 Pre-Norm 结构 (Norm 在 Attention/FFN 之前)，有助于稳定训练。
@@ -168,16 +153,14 @@ htdemucs_i:
   t_sparse_cross_attn: False  # 是否在交叉注意力中使用稀疏注意力。
   t_mask_type: diag           # 稀疏掩码的类型。
   t_mask_random_seed: 42      # 稀疏掩码的随机种子。
-  t_sparse_attn_window: 500   # 稀疏注意力的窗口大小。
+  t_sparse_attn_window: 400   # 稀疏注意力的窗口大小。
   t_global_window: 100        # 全局注意力的窗口大小。
   t_sparsity: 0.95            # 注意力矩阵的稀疏度。
   t_auto_sparsity: False      # 是否自动调整稀疏度。
   # Cross Encoder First (False)
   t_cross_first: False        # 是否先进行交叉注意力再进行自注意力。
   # Weight init
-  rescale: 0.2                # 与HTDemucs_i默认配置一致
-  # Metadata
-  use_train_segment: true     # 使用训练时的segment长度
+  rescale: 0.1                # 权重初始化缩放因子。
 
 # --- 奇异值分解 (Singular Value Decomposition) 正则化 ---
 svd:
@@ -215,7 +198,7 @@ hydra:
     formatters:
       colorlog:
         datefmt: "%m-%d %H:%M:%S" # 定义日志中日期的格式。
-
+        
 # --- 测试/评估 (Evaluation) 配置 ---
 # 控制在测试集上进行模型评估时的行为。
 test:
@@ -229,3 +212,11 @@ test:
   sdr: false        # 禁用SDR计算，因为我们没有MUSDB测试集
   metric: 'loss'    # 在验证集上选择最佳模型时使用的指标。可以是 'loss' (损失) 或 'nsdr' (归一化 SDR)。
   nonhq: null       # 禁用MUSDB测试集评估
+  
+seed: 43              # 随机种子：固定这个值可以确保每次实验的结果都可以复现。
+debug: false          # 调试模式开关。
+valid_apply: true     # 是否在验证时应用模型。
+flag:                 # 一个空的标志位，可用于在命令行中传递自定义标志。
+save_every:           # 每隔多少个 epoch 保存一次模型，而不是只保存最好的。
+weights: [1.0]   # 训练/验证损失中，每个音轨所占的权重。只关心instrumental
+

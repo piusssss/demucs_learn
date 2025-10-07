@@ -30,6 +30,7 @@ from .htdemucs_i import HTDemucs_i
 from .htdemucs_s import HTDemucs_s
 from .htdemucs_d import HTDemucs_d
 from .htdemucs_d2 import HTDemucs_d2
+from .htdemucs_c import HTDemucs_c
 from .repitch import RepitchedWrapper
 from .solver import Solver
 from .states import capture_init
@@ -75,6 +76,7 @@ def get_model(args):
         'htdemucs_s': HTDemucs_s,
         'htdemucs_d': HTDemucs_d,
         'htdemucs_d2': HTDemucs_d2,
+        'htdemucs_c': HTDemucs_c,
         'torch_hdemucs': TorchHDemucsWrapper,
     }[args.model]
     kw = OmegaConf.to_container(getattr(args, args.model), resolve=True)
@@ -229,7 +231,7 @@ def get_solver_from_sig(sig, model_only=False):
         return get_solver(xp.cfg, model_only)
 
 
-@hydra_main(config_path="../conf", config_name="d2_train", version_base="1.1")
+@hydra_main(config_path="../conf", config_name="c_train", version_base="1.1")
 def main(args):
     global __file__
     __file__ = hydra.utils.to_absolute_path(__file__)

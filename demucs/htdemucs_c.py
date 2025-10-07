@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from fractions import Fraction
 from einops import rearrange
 
-from .transformer_d2 import CrossTransformerEncoder
+from .transformer_c import CrossTransformerEncoder
 
 from .demucs import rescale_module
 from .states import capture_init
@@ -15,7 +15,7 @@ from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
-class HTDemucs_d2(nn.Module):
+class HTDemucs_c(nn.Module):
 
     @capture_init
     def __init__(
@@ -23,12 +23,9 @@ class HTDemucs_d2(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=58,
+        channels=64,
         channels_time=None,
         growth=2,
-        layers_1=1,
-        layers_2=3,
-        layers_3=5,
         # STFT
         nfft=8192,
         wiener_iters=0,
@@ -36,7 +33,7 @@ class HTDemucs_d2(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=6,
+        depth=3,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -46,29 +43,25 @@ class HTDemucs_d2(nn.Module):
         emb_smooth=True,
         # Convolutions
         kernel_size=16,
-        time_stride=8,
-        stride=8,
+        time_stride=2,
+        stride=4,
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=3,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
-        dconv_depth=3,
+        dconv_depth=2,
         dconv_comp=8,
-        dconv_init=1e-2,
+        dconv_init=1e-3,
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers_1=3,
-        t_layers_2=3,
-        t_layers=5,
+        t_layers=0,
         t_emb="sin",
-        t_hidden_scale=2,
-        t_heads_1=8,
-        t_heads_2=8,
-        t_heads=16,
+        t_hidden_scale=4.0,
+        t_heads=8,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -97,7 +90,7 @@ class HTDemucs_d2(nn.Module):
         # ------ Particuliar parameters
         t_cross_first=False,
         # Weight init
-        rescale=0.2,
+        rescale=0.1,
         # Metadata
         samplerate=44100,
         segment=4,
@@ -113,16 +106,13 @@ class HTDemucs_d2(nn.Module):
         self.context = context
         self.stride = stride
         self.depth = depth
-        self.layers_1 = layers_1
-        self.layers_2 = layers_2
-        self.layers_3 = layers_3
         self.bottom_channels = bottom_channels
         self.channels = channels
         self.samplerate = samplerate
         self.segment = segment
         self.use_train_segment = use_train_segment
         self.nfft = nfft
-        self.hop_length = nfft // 4
+        self.hop_length = nfft // 8
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
@@ -147,27 +137,18 @@ class HTDemucs_d2(nn.Module):
             freq = freqs > 1
             stri = stride
             ker = kernel_size
+            if not freq:
+                assert freqs == 1
+                ker = time_stride * 2
+                stri = time_stride
 
             pad = True
             last_freq = False
+            if freq and freqs <= kernel_size:
+                ker = freqs
+                pad = False
+                last_freq = True
 
-            if index >= layers_1:
-                growth = 1
-                if index == layers_2 - 1:
-                    growth =2
-                ker = int(ker // 2)
-                stri = int(stri // 2)
-            if index >= layers_2:
-                growth = 1
-                if index == layers_3 - 1:
-                    growth =2
-                ker = int(ker // 2)
-                stri = int(stri // 2)
-            if index >= layers_3:
-                growth = 2
-                #ker = int(ker // 2)
-                #stri = int(stri // 2)  
-             
             kw = {
                 "kernel_size": ker,
                 "stride": stri,
@@ -185,6 +166,8 @@ class HTDemucs_d2(nn.Module):
             }
             kwt = dict(kw)
             kwt["freq"] = 0
+            kwt["kernel_size"] = kernel_size
+            kwt["stride"] = stride
             kwt["pad"] = True
             kw_dec = dict(kw)
             multi = False
@@ -245,9 +228,11 @@ class HTDemucs_d2(nn.Module):
             chin_z = chout_z
             chout = int(growth * chout)
             chout_z = int(growth * chout_z)
-
-            freqs //= stri  # 使用实际的stride值
-            
+            if freq:
+                if freqs <= kernel_size:
+                    freqs = 1
+                else:
+                    freqs //= stride
             if index == 0 and freq_emb:
                 self.freq_emb = ScaledEmbedding(
                     freqs, chin_z, smooth=emb_smooth, scale=emb_scale
@@ -257,15 +242,7 @@ class HTDemucs_d2(nn.Module):
         if rescale:
             rescale_module(self, reference=rescale)
 
-        # 可学习的残差权重
-        self.residual_weight_freq = nn.Parameter(torch.tensor(0.0))
-        self.residual_weight_time = nn.Parameter(torch.tensor(0.0))
-        self.residual_weight_freq_1 = nn.Parameter(torch.tensor(0.0))
-        self.residual_weight_time_1 = nn.Parameter(torch.tensor(0.0))
-        self.residual_weight_freq_2 = nn.Parameter(torch.tensor(0.0))
-        self.residual_weight_time_2 = nn.Parameter(torch.tensor(0.0))
-        
-        transformer_channels = channels * 4
+        transformer_channels = channels * growth ** (depth - 1)
         if bottom_channels:
             self.channel_upsampler = nn.Conv1d(
                 transformer_channels, bottom_channels, 1
@@ -281,86 +258,12 @@ class HTDemucs_d2(nn.Module):
             )
 
             transformer_channels = bottom_channels
-            
-        if t_layers_1 > 0:
-            self.mytransformer_1 = CrossTransformerEncoder(
-                dim=transformer_channels,
-                emb=t_emb,
-                hidden_scale=t_hidden_scale,
-                num_heads=t_heads_1,
-                num_layers=t_layers_1,
-                cross_first=t_cross_first,
-                dropout=t_dropout,
-                max_positions=t_max_positions,
-                norm_in=t_norm_in,
-                norm_in_group=t_norm_in_group,
-                group_norm=t_group_norm,
-                norm_first=t_norm_first,
-                norm_out=t_norm_out,
-                max_period=t_max_period,
-                weight_decay=t_weight_decay,
-                lr=t_lr,
-                layer_scale=t_layer_scale,
-                gelu=t_gelu,
-                sin_random_shift=t_sin_random_shift,
-                weight_pos_embed=t_weight_pos_embed,
-                cape_mean_normalize=t_cape_mean_normalize,
-                cape_augment=t_cape_augment,
-                cape_glob_loc_scale=t_cape_glob_loc_scale,
-                sparse_self_attn=t_sparse_self_attn,
-                sparse_cross_attn=t_sparse_cross_attn,
-                mask_type=t_mask_type,
-                mask_random_seed=t_mask_random_seed,
-                sparse_attn_window=t_sparse_attn_window,
-                global_window=t_global_window,
-                sparsity=t_sparsity,
-                auto_sparsity=t_auto_sparsity,
-            )
-        else:
-            self.mytransformer_1 = None
-            
-        if t_layers_2 > 0:
-            self.mytransformer_2 = CrossTransformerEncoder(
-                dim=transformer_channels,
-                emb=t_emb,
-                hidden_scale=t_hidden_scale,
-                num_heads=t_heads_2,
-                num_layers=t_layers_2,
-                cross_first=t_cross_first,
-                dropout=t_dropout,
-                max_positions=t_max_positions,
-                norm_in=t_norm_in,
-                norm_in_group=t_norm_in_group,
-                group_norm=t_group_norm,
-                norm_first=t_norm_first,
-                norm_out=t_norm_out,
-                max_period=t_max_period,
-                weight_decay=t_weight_decay,
-                lr=t_lr,
-                layer_scale=t_layer_scale,
-                gelu=t_gelu,
-                sin_random_shift=t_sin_random_shift,
-                weight_pos_embed=t_weight_pos_embed,
-                cape_mean_normalize=t_cape_mean_normalize,
-                cape_augment=t_cape_augment,
-                cape_glob_loc_scale=t_cape_glob_loc_scale,
-                sparse_self_attn=t_sparse_self_attn,
-                sparse_cross_attn=t_sparse_cross_attn,
-                mask_type=t_mask_type,
-                mask_random_seed=t_mask_random_seed,
-                sparse_attn_window=t_sparse_attn_window,
-                global_window=t_global_window,
-                sparsity=t_sparsity,
-                auto_sparsity=t_auto_sparsity,
-            )
-        else:
-            self.mytransformer_2 = None
-            
+
         if t_layers > 0:
             self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels * 2,
+                dim=transformer_channels,
                 emb=t_emb,
-                hidden_scale=t_hidden_scale * 2,
+                hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
                 num_layers=t_layers,
                 cross_first=t_cross_first,
@@ -401,25 +304,25 @@ class HTDemucs_d2(nn.Module):
         # We re-pad the signal in order to keep the property
         # that the size of the output is exactly the size of the input
         # divided by the stride (here hop_length), when divisible.
-        # This is achieved by padding by 1/4th of the kernel size (here nfft).
+        # This is achieved by padding by 1/8th of the kernel size (here nfft).
         # which is not supported by torch.stft.
         # Having all convolution operations follow this convention allow to easily
         # align the time and frequency branches later on.
-        assert hl == nfft // 4
+        assert hl == nfft // 8  
         le = int(math.ceil(x.shape[-1] / hl))
-        pad = hl // 2 * 3
+        pad = hl // 2 * 7  
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
 
         z = spectro(x, nfft, hl)[..., :-1, :]
-        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
-        z = z[..., 2: 2 + le]
+        assert z.shape[-1] == le + 8, (z.shape, x.shape, le)  
+        z = z[..., 4: 4 + le] 
         return z
 
     def _ispec(self, z, length=None, scale=0):
-        hl = self.hop_length // (4**scale)
+        hl = self.hop_length // (8**scale)  
         z = F.pad(z, (0, 0, 0, 1))
-        z = F.pad(z, (2, 2))
-        pad = hl // 2 * 3
+        z = F.pad(z, (4, 4))  
+        pad = hl // 2 * 7  
         le = hl * int(math.ceil(length / hl)) + 2 * pad
         x = ispectro(z, hl, length=le)
         x = x[..., pad: pad + length]
@@ -550,36 +453,7 @@ class HTDemucs_d2(nn.Module):
                     # tenc contains just the first conv., so that now time and freq.
                     # branches have the same shape and can be merged.
                     inject = xt
-            
-            
             x = encode(x, inject)
-            
-            if self.mytransformer_1 and idx == self.layers_2:
-
-                residual_x = x
-                residual_xt = xt
-            
-                if self.bottom_channels:
-                    b, c, f, t = x.shape
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_upsampler(x)
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    xt = self.channel_upsampler_t(xt)
-
-                x, xt = self.mytransformer_1(x, xt)
-
-                if self.bottom_channels:
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_downsampler(x)
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    xt = self.channel_downsampler_t(xt)
-                
-                alpha_freq = torch.sigmoid(self.residual_weight_freq_1)  
-                alpha_time = torch.sigmoid(self.residual_weight_time_1)
-                
-                x = alpha_freq * x + (1 - alpha_freq) * residual_x
-                xt = alpha_time * xt + (1 - alpha_time) * residual_xt
-            
             if idx == 0 and self.freq_emb is not None:
                 # add frequency embedding to allow for non equivariant convolutions
                 # over the frequency axis.
@@ -588,12 +462,7 @@ class HTDemucs_d2(nn.Module):
                 x = x + self.freq_emb_scale * emb
 
             saved.append(x)
-            
         if self.crosstransformer:
-            # 保存残差
-            residual_x = x
-            residual_xt = xt
-            
             if self.bottom_channels:
                 b, c, f, t = x.shape
                 x = rearrange(x, "b c f t-> b c (f t)")
@@ -608,15 +477,8 @@ class HTDemucs_d2(nn.Module):
                 x = self.channel_downsampler(x)
                 x = rearrange(x, "b c (f t)-> b c f t", f=f)
                 xt = self.channel_downsampler_t(xt)
-            
-            alpha_freq = torch.sigmoid(self.residual_weight_freq)  
-            alpha_time = torch.sigmoid(self.residual_weight_time)
-            
-            x = alpha_freq * x + (1 - alpha_freq) * residual_x
-            xt = alpha_time * xt + (1 - alpha_time) * residual_xt
 
         for idx, decode in enumerate(self.decoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
             # `pre` contains the output just before final transposed convolution,
@@ -633,33 +495,9 @@ class HTDemucs_d2(nn.Module):
                 else:
                     skip = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip, length_t)
+                    
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")
 
-            if self.mytransformer_2 and idx == self.depth - 2 - self.layers_2:
-
-                residual_x = x
-                residual_xt = xt
-            
-                if self.bottom_channels:
-                    b, c, f, t = x.shape
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_upsampler(x)
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    xt = self.channel_upsampler_t(xt)
-
-                x, xt = self.mytransformer_2(x, xt)
-
-                if self.bottom_channels:
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_downsampler(x)
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    xt = self.channel_downsampler_t(xt)
-                
-                alpha_freq = torch.sigmoid(self.residual_weight_freq_2)  
-                alpha_time = torch.sigmoid(self.residual_weight_time_2)
-                
-                x = alpha_freq * x + (1 - alpha_freq) * residual_x
-                xt = alpha_time * xt + (1 - alpha_time) * residual_xt
-                
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0
