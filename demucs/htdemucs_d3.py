@@ -15,7 +15,7 @@ from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
-class HTDemucs_d2(nn.Module):
+class HTDemucs_d3(nn.Module):
 
     @capture_init
     def __init__(
@@ -23,9 +23,9 @@ class HTDemucs_d2(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=108,
+        channels=24,
         channels_time=None,
-        growth=2,
+        growth=2.5,
         layers_1=1,
         layers_2=3,
         layers_3=5,
@@ -36,7 +36,7 @@ class HTDemucs_d2(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=6,
+        depth=5,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -45,13 +45,13 @@ class HTDemucs_d2(nn.Module):
         emb_scale=10,
         emb_smooth=True,
         # Convolutions
-        kernel_size=16,
+        kernel_size=32,
         time_stride=8,
-        stride=8,
+        stride=4,
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=4,
+        norm_starts=45,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
@@ -63,7 +63,7 @@ class HTDemucs_d2(nn.Module):
         # Transformer
         t_layers_1=0,
         t_layers_2=0,
-        t_layers=3,
+        t_layers=0,
         t_emb="sin",
         t_hidden_scale=0.5,
         t_heads_1=4,
@@ -122,7 +122,7 @@ class HTDemucs_d2(nn.Module):
         self.segment = segment
         self.use_train_segment = use_train_segment
         self.nfft = nfft
-        self.hop_length = nfft // 4
+        self.hop_length = nfft // 8
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
@@ -150,20 +150,21 @@ class HTDemucs_d2(nn.Module):
 
             pad = True
             last_freq = False
-
-            if index >= layers_1:
-                growth = 1
-                if index == layers_2 - 1:
-                    growth =2
+            if index == layers_1:
+                growth =2
+            if index > layers_1:
+                growth = 2
+                if index == layers_2 :
+                    growth =1.5
                 ker = int(ker // 2)
                 stri = int(stri // 2)
-            if index >= layers_2:
-                growth = 1
-                if index == layers_3 - 1:
-                    growth =2
+            if index > layers_2:
+                growth = 1.5
+                if index == layers_3 :
+                    growth =1.5
                 ker = int(ker // 2)
-                stri = int(stri // 2)
-            if index >= layers_3:
+                #stri = int(stri // 2)
+            if index > layers_3:
                 growth = 2
                 #ker = int(ker // 2)
                 #stri = int(stri // 2)  
@@ -401,25 +402,25 @@ class HTDemucs_d2(nn.Module):
         # We re-pad the signal in order to keep the property
         # that the size of the output is exactly the size of the input
         # divided by the stride (here hop_length), when divisible.
-        # This is achieved by padding by 1/4th of the kernel size (here nfft).
+        # This is achieved by padding by 1/8th of the kernel size (here nfft).
         # which is not supported by torch.stft.
         # Having all convolution operations follow this convention allow to easily
         # align the time and frequency branches later on.
-        assert hl == nfft // 4
+        assert hl == nfft // 8  
         le = int(math.ceil(x.shape[-1] / hl))
-        pad = hl // 2 * 3
+        pad = hl // 2 * 7  
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
 
         z = spectro(x, nfft, hl)[..., :-1, :]
-        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
-        z = z[..., 2: 2 + le]
+        assert z.shape[-1] == le + 8, (z.shape, x.shape, le)  
+        z = z[..., 4: 4 + le] 
         return z
 
     def _ispec(self, z, length=None, scale=0):
-        hl = self.hop_length // (4**scale)
+        hl = self.hop_length // (8**scale)  
         z = F.pad(z, (0, 0, 0, 1))
-        z = F.pad(z, (2, 2))
-        pad = hl // 2 * 3
+        z = F.pad(z, (4, 4))  
+        pad = hl // 2 * 7  
         le = hl * int(math.ceil(length / hl)) + 2 * pad
         x = ispectro(z, hl, length=le)
         x = x[..., pad: pad + length]

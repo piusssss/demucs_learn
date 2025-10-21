@@ -17,7 +17,7 @@ dset:
   musdb_path: null                            # 明确设置MUSDB路径为null
   wav: E:/CODE/python_code/inst/demucs/data/instrumental          # 你的自定义WAV训练集路径
   wav2: false                                  # 第二个自定义 WAV 训练集的根目录路径。
-  segment: 6                                   # 
+  segment: 4                                   # 
   shift: 1                                     # 移位。
   train_valid: false                           # 是否从训练集中切分一部分作为验证集。
   full_cv: false                               # 是否使用完整的交叉验证数据。
@@ -30,16 +30,16 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 4              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.788 12.996  14.076 13.310 13.361 13.588
-batch_size: 1           # 批大小：保持不变
-max_batches: 1000         # 限制每个epoch最多处理100个batch，快速测试
+epochs: 2              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.788 12.996  14.076 13.310 13.361 13.588
+batch_size: 2           # 批大小：保持不变
+max_batches:          # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
 # 定义了如何根据损失来更新模型权重。
 optim:
-  lr: 1.2e-3           # 学习率
-  momentum: 0.9       # 动量 (Momentum)：Adam 优化器的参数之一。
-  beta2: 0.999        # Adam 优化器的参数之二。
+  lr: 1e-3           # 学习率
+  momentum: 0.8       # 动量 (Momentum)：Adam 优化器的参数之一。
+  beta2: 0.995        # Adam 优化器的参数之二。
   loss: l1            # 损失函数：'l1' (绝对值误差) 在音频领域常用，'mse' (均方误差) 是另一个选项。
   optim: adam         # 优化算法：Adam 是目前的主流选择。
   weight_decay: 0  # 权重衰减：一种正则化手段，用于防止模型过拟合。
@@ -57,14 +57,14 @@ weights: [1.0]   # 训练/验证损失中，每个音轨所占的权重。只关
 augment:
   shift_same: true   # 对同一首歌的不同音轨，是否应用完全相同的随机时移。
   repitch:            # 变调/变速增强。
-    proba: 0.05        # 恢复repitch增强
+    proba: 0.02        # 恢复repitch增强
     max_pitch: 1
     max_tempo: 1     # 节拍变化的最大范围。
   remix:              # 音轨混合增强：将不同歌曲的音轨混合在一起，创造新的训练样本。
     proba: 0          # 禁用remix增强，因为我们是单轨分离
     group_size: 4     # 每次从 4 首不同的歌里随机抽取音轨来混合。
   scale:              # 音量缩放增强。
-    proba: 0.3        # 90% 的概率应用此增强。
+    proba: 0.2        # 90% 的概率应用此增强。
     min: 0.25          # 最小缩放到原音量的 0.5 倍。
     max: 1.75          # 最大放大到原音量的 1.5 倍。
   flip: true          # 随机进行左右声道翻转增强。
@@ -79,7 +79,7 @@ continue_opt: false     # 是否同时加载优化器的状态。对于微调，
 # --- 其他杂项配置 ---
 misc:
   num_workers: 0      # 数据加载时使用的 CPU 进程数，设为0避免多进程问题
-  num_prints: 50       # 每个 epoch 打印多少次训练信息，减少到2
+  num_prints: 5       # 每个 epoch 打印多少次训练信息，减少到2
   show: false         # 是否显示图谱等可视化信息（需要图形界面）。
   verbose: false      # 是否打印更详细的日志。
 
@@ -88,18 +88,18 @@ misc:
 # Batch 级别的 EMA 在 GPU 上计算以保证速度。
 ema:
   epoch: []        # 在 epoch 级别应用的 EMA 衰减率列表，回到成功配置。
-  batch: [0.9995]       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
+  batch: [0.999]       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
 
 use_train_segment: true  # (待移除的旧参数)
 model_segment: 10        
-model: htdemucs_d2          # 使用HTDemucs模型
+model: htdemucs_d3          # 使用HTDemucs模型
 
 # --- Hybrid Transformer Demucs (HTDemucs_d) 模型配置 ---
-htdemucs_d2:
+htdemucs_d3:
   # --- 卷积部分 (U-Net) ---
-  channels: 108          # 基础通道数
+  channels: 24          # 基础通道数
   channels_time:        # 时域分支通道数。
-  growth: 2             # 通道增长率。
+  growth: 2.5             # 通道增长率。
   layers_1: 1           # 第一阶段层数
   layers_2: 3           # 第二阶段层数  
   layers_3: 5           # 第三阶段层数
@@ -110,7 +110,7 @@ htdemucs_d2:
   wiener_residual: false  # 对残差进行维纳滤波。
   cac: true             # Complex as Channels 技术。
   # Main structure
-  depth: 6              # U-Net深度
+  depth: 5              # U-Net深度
   rewrite: true         # 使用重写的高效实现。
   # Frequency Branch
   multi_freqs: []       # 多频率分辨率列表。
@@ -119,13 +119,13 @@ htdemucs_d2:
   emb_scale: 10         # 嵌入缩放系数。
   emb_smooth: true      # 平滑嵌入。
   # Convolutions
-  kernel_size: 16       # 卷积核大小。
-  stride: 8             # 卷积步长。
+  kernel_size: 32       # 卷积核大小。
+  stride: 4             # 卷积步长。
   time_stride: 8        # 时域步长。
   context: 1            # 卷积上下文。
   context_enc: 0        # 编码器上下文。
   # normalization
-  norm_starts: 4        # 开始归一化的层。
+  norm_starts: 45        # 开始归一化的层。
   norm_groups: 4        # 归一化组数。
   # DConv residual branch
   dconv_mode: 1         # DConv 模式。
@@ -142,7 +142,7 @@ htdemucs_d2:
   t_layers_2: 0         # 第二个Transformer层数
   t_heads_2: 4          # 第二个Transformer注意力头数
   # ------ Cross Transformer (跨模态融合) ------
-  t_layers: 3           # 跨模态Transformer层数
+  t_layers: 0           # 跨模态Transformer层数
   t_heads: 8           # 跨模态Transformer注意力头数
   # ------ 通用Transformer参数 ------
   t_hidden_scale: 0.5   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
