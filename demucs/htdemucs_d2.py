@@ -23,7 +23,7 @@ class HTDemucs_d2(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=58,
+        channels=90,
         channels_time=None,
         growth=2,
         layers_1=1,
@@ -51,24 +51,24 @@ class HTDemucs_d2(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=3,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
-        dconv_depth=3,
+        dconv_depth=2,
         dconv_comp=8,
-        dconv_init=1e-2,
+        dconv_init=3e-3,
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers_1=3,
-        t_layers_2=3,
-        t_layers=5,
+        t_layers_1=2,
+        t_layers_2=2,
+        t_layers=3,
         t_emb="sin",
-        t_hidden_scale=2,
-        t_heads_1=8,
-        t_heads_2=8,
-        t_heads=16,
+        t_hidden_scale=1.5,
+        t_heads_1=4,
+        t_heads_2=4,
+        t_heads=8,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -97,10 +97,10 @@ class HTDemucs_d2(nn.Module):
         # ------ Particuliar parameters
         t_cross_first=False,
         # Weight init
-        rescale=0.2,
+        rescale=0.15,
         # Metadata
         samplerate=44100,
-        segment=4,
+        segment=10,
         use_train_segment=True,
     ):
 
@@ -289,7 +289,7 @@ class HTDemucs_d2(nn.Module):
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads_1,
                 num_layers=t_layers_1,
-                cross_first=t_cross_first,
+                cross_first=True,
                 dropout=t_dropout,
                 max_positions=t_max_positions,
                 norm_in=t_norm_in,
@@ -326,7 +326,7 @@ class HTDemucs_d2(nn.Module):
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads_2,
                 num_layers=t_layers_2,
-                cross_first=t_cross_first,
+                cross_first=True,
                 dropout=t_dropout,
                 max_positions=t_max_positions,
                 norm_in=t_norm_in,
@@ -616,7 +616,7 @@ class HTDemucs_d2(nn.Module):
             xt = alpha_time * xt + (1 - alpha_time) * residual_xt
 
         for idx, decode in enumerate(self.decoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")
+            
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
             # `pre` contains the output just before final transposed convolution,
@@ -660,6 +660,7 @@ class HTDemucs_d2(nn.Module):
                 x = alpha_freq * x + (1 - alpha_freq) * residual_x
                 xt = alpha_time * xt + (1 - alpha_time) * residual_xt
                 
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0

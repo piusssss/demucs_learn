@@ -11,10 +11,10 @@ from thop import profile
 
 # Model parameters (these should match your model's __init__ parameters)
 samplerate = 44100
-segment = 10
 speed = True
-# Instantiate the model with correct parameters
-model = HTDemucs_c(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate, segment=segment)
+# Instantiate the model with default parameters (let it use its own default segment)
+model = HTDemucs_d2(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
+segment = model.segment  # Use the model's actual segment parameter
 
 # Move model to GPU if available
 if torch.cuda.is_available():

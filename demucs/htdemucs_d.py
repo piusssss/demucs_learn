@@ -23,7 +23,7 @@ class HTDemucs_d(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=84,
+        channels=128,
         channels_time=None,
         growth=2,
         layers_1=1,
@@ -61,14 +61,14 @@ class HTDemucs_d(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers_1=3,
-        t_layers_2=3,
-        t_layers=5,
+        t_layers_1=0,
+        t_layers_2=0,
+        t_layers=3,
         t_emb="sin",
-        t_hidden_scale=4,
+        t_hidden_scale=2,
         t_heads_1=8,
         t_heads_2=8,
-        t_heads=16,
+        t_heads=4,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -158,7 +158,7 @@ class HTDemucs_d(nn.Module):
             if index >= layers_2:
                 growth = 1
                 if index == layers_3 - 1:
-                    growth =2
+                    growth =2  
                 ker = int(ker // 2)
                 stri = int(stri // 2)
             if index >= layers_3:
@@ -533,7 +533,7 @@ class HTDemucs_d(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
+            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -614,7 +614,6 @@ class HTDemucs_d(nn.Module):
             xt = alpha_time * xt + (1 - alpha_time) * residual_xt
 
         for idx, decode in enumerate(self.decoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape}")
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
             # `pre` contains the output just before final transposed convolution,
@@ -657,7 +656,8 @@ class HTDemucs_d(nn.Module):
                 
                 x = alpha_freq * x + (1 - alpha_freq) * residual_x
                 xt = alpha_time * xt + (1 - alpha_time) * residual_xt
-                
+            
+            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0

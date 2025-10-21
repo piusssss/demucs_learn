@@ -23,7 +23,7 @@ class HTDemucs_c(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=64,
+        channels=38,
         channels_time=None,
         growth=2,
         # STFT
@@ -33,7 +33,7 @@ class HTDemucs_c(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=3,
+        depth=6,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,

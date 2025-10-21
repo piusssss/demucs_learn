@@ -30,14 +30,14 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 10              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.645
+epochs: 2              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.645
 batch_size: 2           # 批大小：保持不变
 max_batches:        # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
 # 定义了如何根据损失来更新模型权重。
 optim:
-  lr: 5e-5           # 学习率
+  lr: 8e-4           # 学习率
   momentum: 0.8       # 动量 (Momentum)：Adam 优化器的参数之一。
   beta2: 0.995        # Adam 优化器的参数之二。
   loss: l1            # 损失函数：'l1' (绝对值误差) 在音频领域常用，'mse' (均方误差) 是另一个选项。
@@ -97,7 +97,7 @@ model: htdemucs_d          # 使用HTDemucs模型
 # --- Hybrid Transformer Demucs (HTDemucs_d) 模型配置 ---
 htdemucs_d:
   # --- 卷积部分 (U-Net) ---
-  channels: 84          # 基础通道数
+  channels: 128          # 基础通道数
   channels_time:        # 时域分支通道数。
   growth: 2             # 通道增长率。
   layers_1: 1           # 第一阶段层数
@@ -125,7 +125,7 @@ htdemucs_d:
   context: 1            # 卷积上下文。
   context_enc: 0        # 编码器上下文。
   # normalization
-  norm_starts: 99        # 开始归一化的层。
+  norm_starts: 4        # 开始归一化的层。
   norm_groups: 4        # 归一化组数。
   # DConv residual branch
   dconv_mode: 1         # DConv 模式。
@@ -136,16 +136,16 @@ htdemucs_d:
   bottom_channels: 0    # Transformer 前置层的通道数。0 表示与上一层相同。
   # --- 多层 Transformer 配置 ---
   # ------ Transformer 1 (早期特征增强) ------
-  t_layers_1: 3         # 第一个Transformer层数
+  t_layers_1: 0         # 第一个Transformer层数
   t_heads_1: 8          # 第一个Transformer注意力头数
   # ------ Transformer 2 (深层特征提取) ------
-  t_layers_2: 3         # 第二个Transformer层数
+  t_layers_2: 0         # 第二个Transformer层数
   t_heads_2: 8          # 第二个Transformer注意力头数
   # ------ Cross Transformer (跨模态融合) ------
-  t_layers: 5           # 跨模态Transformer层数
-  t_heads: 16           # 跨模态Transformer注意力头数
+  t_layers: 3           # 跨模态Transformer层数
+  t_heads: 4           # 跨模态Transformer注意力头数
   # ------ 通用Transformer参数 ------
-  t_hidden_scale: 4.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
+  t_hidden_scale: 2.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
   t_dropout: 0.0        # Transformer dropout
   t_layer_scale: True   # 是否使用 LayerScale 技术来稳定训练。
   t_gelu: True          # 是否使用 GELU 激活函数。

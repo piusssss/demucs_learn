@@ -30,9 +30,9 @@ dset:
   backend: null                               # 指定 torchaudio 的后端，如 'soundfile'。
 
 # --- 核心训练参数 ---
-epochs: 10              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.788
+epochs: 10              # 训练总轮次：回到成功配置，给更多训练时间  nsdr12.788 12.996  14.076 13.310
 batch_size: 2           # 批大小：保持不变
-max_batches:        # 限制每个epoch最多处理100个batch，快速测试
+max_batches:          # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
 # 定义了如何根据损失来更新模型权重。
@@ -45,7 +45,7 @@ optim:
   weight_decay: 0  # 权重衰减：一种正则化手段，用于防止模型过拟合。
   clip_grad: 0        # 梯度裁剪阈值：防止梯度爆炸。0 表示不启用。
 
-seed: 43              # 随机种子：固定这个值可以确保每次实验的结果都可以复现。
+seed: 42              # 随机种子
 debug: false          # 调试模式开关。
 valid_apply: true     # 是否在验证时应用模型。
 flag:                 # 一个空的标志位，可用于在命令行中传递自定义标志。
@@ -65,8 +65,8 @@ augment:
     group_size: 4     # 每次从 4 首不同的歌里随机抽取音轨来混合。
   scale:              # 音量缩放增强。
     proba: 0        # 90% 的概率应用此增强。
-    min: 0.3          # 最小缩放到原音量的 0.5 倍。
-    max: 1.5          # 最大放大到原音量的 1.5 倍。
+    min: 0.25          # 最小缩放到原音量的 0.5 倍。
+    max: 1.75          # 最大放大到原音量的 1.5 倍。
   flip: true          # 随机进行左右声道翻转增强。
 
 # --- 继续训练 / 微调 (Finetuning) 配置 ---
@@ -91,13 +91,13 @@ ema:
   batch: []       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
 
 use_train_segment: true  # (待移除的旧参数)
-model_segment: 4        
+model_segment: 10        
 model: htdemucs_d2          # 使用HTDemucs模型
 
 # --- Hybrid Transformer Demucs (HTDemucs_d) 模型配置 ---
 htdemucs_d2:
   # --- 卷积部分 (U-Net) ---
-  channels: 62          # 基础通道数
+  channels: 90          # 基础通道数
   channels_time:        # 时域分支通道数。
   growth: 2             # 通道增长率。
   layers_1: 1           # 第一阶段层数
@@ -125,27 +125,27 @@ htdemucs_d2:
   context: 1            # 卷积上下文。
   context_enc: 0        # 编码器上下文。
   # normalization
-  norm_starts: 3        # 开始归一化的层。
+  norm_starts: 4        # 开始归一化的层。
   norm_groups: 4        # 归一化组数。
   # DConv residual branch
   dconv_mode: 1         # DConv 模式。
-  dconv_depth: 3        # DConv 深度。
+  dconv_depth: 2        # DConv 深度。
   dconv_comp: 8         # DConv压缩率
-  dconv_init: 1e-2      # DConv 初始化系数。
+  dconv_init: 3e-3      # DConv 初始化系数。
   # Before the Transformer
   bottom_channels: 0    # Transformer 前置层的通道数。0 表示与上一层相同。
   # --- 多层 Transformer 配置 ---
   # ------ Transformer 1 (早期特征增强) ------
-  t_layers_1: 3         # 第一个Transformer层数
-  t_heads_1: 8          # 第一个Transformer注意力头数
+  t_layers_1: 2         # 第一个Transformer层数
+  t_heads_1: 4          # 第一个Transformer注意力头数
   # ------ Transformer 2 (深层特征提取) ------
-  t_layers_2: 3         # 第二个Transformer层数
-  t_heads_2: 8          # 第二个Transformer注意力头数
+  t_layers_2: 2         # 第二个Transformer层数
+  t_heads_2: 4          # 第二个Transformer注意力头数
   # ------ Cross Transformer (跨模态融合) ------
-  t_layers: 5           # 跨模态Transformer层数
-  t_heads: 16           # 跨模态Transformer注意力头数
+  t_layers: 3           # 跨模态Transformer层数
+  t_heads: 8           # 跨模态Transformer注意力头数
   # ------ 通用Transformer参数 ------
-  t_hidden_scale: 2.0   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
+  t_hidden_scale: 1.5   # Transformer 中前馈网络（FFN）的隐藏层维度放大系数。
   t_dropout: 0.0        # Transformer dropout
   t_layer_scale: True   # 是否使用 LayerScale 技术来稳定训练。
   t_gelu: True          # 是否使用 GELU 激活函数。
@@ -180,7 +180,7 @@ htdemucs_d2:
   # Cross Encoder First (False)
   t_cross_first: False        # 是否先进行交叉注意力再进行自注意力。
   # Weight init
-  rescale: 0.2                # 权重初始化缩放因子。
+  rescale: 0.15                # 权重初始化缩放因子。
   # Metadata
   use_train_segment: true     # 使用训练时的segment长度
 
