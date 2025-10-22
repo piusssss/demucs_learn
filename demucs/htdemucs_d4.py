@@ -15,7 +15,7 @@ from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
-class HTDemucs_d3(nn.Module):
+class HTDemucs_d4(nn.Module):
 
     @capture_init
     def __init__(
@@ -25,10 +25,10 @@ class HTDemucs_d3(nn.Module):
         audio_channels=2,
         channels=24,
         channels_time=None,
-        growth=2.5,
-        layers_1=1,
-        layers_2=3,
-        layers_3=5,
+        growth=1.5,
+        layers_1=2,
+        layers_2=4,
+        layers_3=6,
         # STFT
         nfft=8192,
         wiener_iters=0,
@@ -36,7 +36,7 @@ class HTDemucs_d3(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=5,
+        depth=8,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -45,13 +45,13 @@ class HTDemucs_d3(nn.Module):
         emb_scale=10,
         emb_smooth=True,
         # Convolutions
-        kernel_size=32,
+        kernel_size=64,
         time_stride=8,
         stride=4,
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=45,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
@@ -63,9 +63,9 @@ class HTDemucs_d3(nn.Module):
         # Transformer
         t_layers_1=0,
         t_layers_2=0,
-        t_layers=0,
+        t_layers=3,
         t_emb="sin",
-        t_hidden_scale=0.5,
+        t_hidden_scale=1,
         t_heads_1=4,
         t_heads_2=4,
         t_heads=8,
@@ -150,23 +150,23 @@ class HTDemucs_d3(nn.Module):
 
             pad = True
             last_freq = False
-            if index == layers_1:
-                growth =2
-            if index > layers_1:
-                growth = 2
-                if index == layers_2 :
-                    growth =1.5
+            #if index == layers_1:
+                #growth =1.5
+            if index >= layers_1:
+                #growth = 1.5
+                #if index == layers_2 :
+                    #growth =1.5
                 ker = int(ker // 2)
                 stri = int(stri // 2)
-            if index > layers_2:
-                growth = 1.5
-                if index == layers_3 :
-                    growth =1.5
+            if index >= layers_2:
+                #growth = 1.5
+                #if index == layers_3 :
+                    #growth =1.5
                 ker = int(ker // 2)
                 #stri = int(stri // 2)
-            if index > layers_3:
-                growth = 2
-                #ker = int(ker // 2)
+            if index >= layers_3:
+                #growth = 1
+                ker = int(ker // 2)
                 #stri = int(stri // 2)  
              
             kw = {
@@ -246,7 +246,10 @@ class HTDemucs_d3(nn.Module):
             chin_z = chout_z
             chout = int(growth * chout)
             chout_z = int(growth * chout_z)
-
+            if chout %4!=0:
+                chout+=4-chout%4
+            if chout_z %4!=0:
+                chout_z+=4-chout_z%4
             freqs //= stri  # 使用实际的stride值
             
             if index == 0 and freq_emb:
@@ -266,7 +269,7 @@ class HTDemucs_d3(nn.Module):
         self.residual_weight_freq_2 = nn.Parameter(torch.tensor(0.0))
         self.residual_weight_time_2 = nn.Parameter(torch.tensor(0.0))
         
-        transformer_channels = channels * 4
+        transformer_channels = int(chout//growth)
         if bottom_channels:
             self.channel_upsampler = nn.Conv1d(
                 transformer_channels, bottom_channels, 1
@@ -359,9 +362,9 @@ class HTDemucs_d3(nn.Module):
             
         if t_layers > 0:
             self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels * 2,
+                dim=transformer_channels,
                 emb=t_emb,
-                hidden_scale=t_hidden_scale * 2,
+                hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
                 num_layers=t_layers,
                 cross_first=t_cross_first,
@@ -536,7 +539,7 @@ class HTDemucs_d3(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
+            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -661,7 +664,7 @@ class HTDemucs_d3(nn.Module):
                 x = alpha_freq * x + (1 - alpha_freq) * residual_x
                 xt = alpha_time * xt + (1 - alpha_time) * residual_xt
                 
-            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
+            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0

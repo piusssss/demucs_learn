@@ -93,7 +93,7 @@ class HTDemucs_c(nn.Module):
         rescale=0.1,
         # Metadata
         samplerate=44100,
-        segment=4,
+        segment=10,
         use_train_segment=True,
     ):
 

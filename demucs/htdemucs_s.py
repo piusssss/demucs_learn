@@ -23,7 +23,7 @@ class HTDemucs_s(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=72,
+        channels=96,
         channels_time=None,
         growth=2,
         # STFT
@@ -49,19 +49,19 @@ class HTDemucs_s(nn.Module):
         context_enc=0,
         # Normalization
         norm_starts=3,
-        norm_groups=3,
+        norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
         dconv_depth=2,
         dconv_comp=8,
-        dconv_init=1e-2,
+        dconv_init=1e-3,
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers=7,
+        t_layers=3,
         t_emb="sin",
-        t_hidden_scale=6.0,
-        t_heads=12,
+        t_hidden_scale=10.0,
+        t_heads=8,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -90,10 +90,10 @@ class HTDemucs_s(nn.Module):
         # ------ Particuliar parameters
         t_cross_first=False,
         # Weight init
-        rescale=0.2,
+        rescale=0.1,
         # Metadata
         samplerate=44100,
-        segment=16,
+        segment=10,
         use_train_segment=True,
     ):
 
@@ -112,7 +112,7 @@ class HTDemucs_s(nn.Module):
         self.segment = segment
         self.use_train_segment = use_train_segment
         self.nfft = nfft
-        self.hop_length = nfft // 4
+        self.hop_length = nfft // 8
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
@@ -242,6 +242,8 @@ class HTDemucs_s(nn.Module):
         if rescale:
             rescale_module(self, reference=rescale)
 
+        self.residual_weight_freq = nn.Parameter(torch.tensor(0.0))
+        self.residual_weight_time = nn.Parameter(torch.tensor(0.0))
         transformer_channels = channels * growth ** (depth - 1)
         if bottom_channels:
             self.channel_upsampler = nn.Conv1d(
@@ -304,25 +306,25 @@ class HTDemucs_s(nn.Module):
         # We re-pad the signal in order to keep the property
         # that the size of the output is exactly the size of the input
         # divided by the stride (here hop_length), when divisible.
-        # This is achieved by padding by 1/4th of the kernel size (here nfft).
+        # This is achieved by padding by 1/8th of the kernel size (here nfft).
         # which is not supported by torch.stft.
         # Having all convolution operations follow this convention allow to easily
         # align the time and frequency branches later on.
-        assert hl == nfft // 4
+        assert hl == nfft // 8  
         le = int(math.ceil(x.shape[-1] / hl))
-        pad = hl // 2 * 3
+        pad = hl // 2 * 7  
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
 
         z = spectro(x, nfft, hl)[..., :-1, :]
-        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
-        z = z[..., 2: 2 + le]
+        assert z.shape[-1] == le + 8, (z.shape, x.shape, le)  
+        z = z[..., 4: 4 + le] 
         return z
 
     def _ispec(self, z, length=None, scale=0):
-        hl = self.hop_length // (4**scale)
+        hl = self.hop_length // (8**scale)  
         z = F.pad(z, (0, 0, 0, 1))
-        z = F.pad(z, (2, 2))
-        pad = hl // 2 * 3
+        z = F.pad(z, (4, 4))  
+        pad = hl // 2 * 7  
         le = hl * int(math.ceil(length / hl)) + 2 * pad
         x = ispectro(z, hl, length=le)
         x = x[..., pad: pad + length]
@@ -438,6 +440,7 @@ class HTDemucs_s(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -462,6 +465,10 @@ class HTDemucs_s(nn.Module):
 
             saved.append(x)
         if self.crosstransformer:
+            
+            residual_x = x
+            residual_xt = xt
+            
             if self.bottom_channels:
                 b, c, f, t = x.shape
                 x = rearrange(x, "b c f t-> b c (f t)")
@@ -477,6 +484,12 @@ class HTDemucs_s(nn.Module):
                 x = rearrange(x, "b c (f t)-> b c f t", f=f)
                 xt = self.channel_downsampler_t(xt)
 
+            alpha_freq = torch.sigmoid(self.residual_weight_freq)  
+            alpha_time = torch.sigmoid(self.residual_weight_time)
+            
+            x = alpha_freq * x + (1 - alpha_freq) * residual_x
+            xt = alpha_time * xt + (1 - alpha_time) * residual_xt
+            
         for idx, decode in enumerate(self.decoder):
             skip = saved.pop(-1)
             x, pre = decode(x, skip, lengths.pop(-1))
@@ -494,7 +507,7 @@ class HTDemucs_s(nn.Module):
                 else:
                     skip = saved_t.pop(-1)
                     xt, _ = tdec(xt, skip, length_t)
-
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0
