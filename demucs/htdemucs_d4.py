@@ -23,7 +23,7 @@ class HTDemucs_d4(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=24,
+        channels=64,
         channels_time=None,
         growth=1.5,
         layers_1=2,
@@ -36,7 +36,7 @@ class HTDemucs_d4(nn.Module):
         wiener_residual=False,
         cac=True,
         # Main structure
-        depth=8,
+        depth=5,
         rewrite=True,
         # Frequency branch
         multi_freqs=None,
@@ -45,19 +45,19 @@ class HTDemucs_d4(nn.Module):
         emb_scale=10,
         emb_smooth=True,
         # Convolutions
-        kernel_size=64,
+        kernel_size=8,
         time_stride=8,
         stride=4,
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=4,
+        norm_starts=5,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
         dconv_depth=2,
         dconv_comp=8,
-        dconv_init=3e-3,
+        dconv_init=1e-3,
         # Before the Transformer
         bottom_channels=0,
         # Transformer
@@ -97,7 +97,7 @@ class HTDemucs_d4(nn.Module):
         # ------ Particuliar parameters
         t_cross_first=False,
         # Weight init
-        rescale=0.15,
+        rescale=0.1,
         # Metadata
         samplerate=44100,
         segment=10,
@@ -154,19 +154,19 @@ class HTDemucs_d4(nn.Module):
                 #growth =1.5
             if index >= layers_1:
                 #growth = 1.5
-                #if index == layers_2 :
-                    #growth =1.5
-                ker = int(ker // 2)
-                stri = int(stri // 2)
+                if index == layers_2-1 :
+                    growth =2
+                ker = int(ker * 2)
+                #stri = int(stri // 2)
             if index >= layers_2:
                 #growth = 1.5
-                #if index == layers_3 :
-                    #growth =1.5
-                ker = int(ker // 2)
+                if index == layers_3-1 :
+                    growth =2
+                ker = int(ker * 2)
                 #stri = int(stri // 2)
             if index >= layers_3:
                 #growth = 1
-                ker = int(ker // 2)
+                ker = int(ker * 2)
                 #stri = int(stri // 2)  
              
             kw = {
@@ -539,7 +539,7 @@ class HTDemucs_d4(nn.Module):
         lengths = []  # saved lengths to properly remove padding, freq branch.
         lengths_t = []  # saved lengths for time branch.
         for idx, encode in enumerate(self.encoder):
-            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{encode.kernel_size},  feel:{encode.kernel_size/(xt.shape[2]/self.segment):.5f}")
             lengths.append(x.shape[-1])
             inject = None
             if idx < len(self.tencoder):
@@ -664,7 +664,7 @@ class HTDemucs_d4(nn.Module):
                 x = alpha_freq * x + (1 - alpha_freq) * residual_x
                 xt = alpha_time * xt + (1 - alpha_time) * residual_xt
                 
-            print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
+            #print(f"Debug - {idx}   x.shape: {x.shape}, y.shape: {xt.shape},ker:{decode.kernel_size},  feel:{decode.kernel_size/(xt.shape[2]/self.segment):.5f}")    
         # Let's make sure we used all stored skip connections.
         assert len(saved) == 0
         assert len(lengths_t) == 0

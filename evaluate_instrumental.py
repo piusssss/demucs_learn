@@ -245,8 +245,8 @@ def calculate_summary_stats(results):
 def main():
     """Main evaluation function."""
     # Configuration
-    test_dir = "data/instrumental_separation/test"
-    model_name = "3fba3fc3"
+    test_dir = "data/test/valid"
+    model_name = "7061066a"
     repo_path = "./release_models"
     
     # Run evaluation
@@ -255,7 +255,7 @@ def main():
             test_dir=test_dir,
             model_name=model_name,
             repo_path=repo_path,
-            shifts=5,
+            shifts=1,
             overlap=0.25,
             workers=4
         )

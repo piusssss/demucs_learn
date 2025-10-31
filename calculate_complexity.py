@@ -15,7 +15,7 @@ from thop import profile
 samplerate = 44100
 speed = True  
 # Instantiate the model with default parameters (let it use its own default segment)
-model = HTDemucs_s(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
+model = HTDemucs(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
 segment = model.segment  # Use the model's actual segment parameter
 
 # Move model to GPU if available

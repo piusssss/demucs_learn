@@ -31,6 +31,8 @@ def main():
                         help="Path where to store release models (default release_models)")
     parser.add_argument('-s', '--sign', action='store_true',
                         help='Add sha256 prefix checksum to the filename.')
+    parser.add_argument('--use-last', action='store_true',
+                        help='Export the last model instead of the best model.')
 
     args = parser.parse_args()
     args.out.mkdir(exist_ok=True, parents=True)
@@ -48,7 +50,13 @@ def main():
                 'Model %s has less epoch than expected (%d / %d)',
                 sig, len(solver.history), solver.args.epochs)
 
-        solver.model.load_state_dict(solver.best_state)
+        # 选择导出最新模型还是最佳模型
+        if args.use_last:
+            logger.info('Using last model state for export')
+            # 当前模型状态就是最新的，不需要额外加载
+        else:
+            logger.info('Using best model state for export')
+            solver.model.load_state_dict(solver.best_state)
         pkg = serialize_model(solver.model, solver.args, solver.quantizer, half=True)
         if getattr(solver.model, 'use_train_segment', False):
             batch = solver.augment(next(iter(solver.loaders['train'])))
