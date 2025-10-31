@@ -200,7 +200,7 @@ def get_wav_datasets(args, name='wav'):
         distributed.barrier()
     train, valid = json.load(open(metadata_file))
     if args.full_cv:
-        kw_cv = {}
+        kw_cv = {'segment': args.segment_v, 'shift': args.shift_v}
     else:
         kw_cv = {'segment': args.segment, 'shift': args.shift}
     # 如果是单源训练，训练集也加载mixture.wav
@@ -248,7 +248,7 @@ def get_musdb_wav_datasets(args):
         metadata_train = {name: meta for name, meta in metadata.items() if name not in valid_tracks}
     metadata_valid = {name: meta for name, meta in metadata.items() if name in valid_tracks}
     if args.full_cv:
-        kw_cv = {}
+        kw_cv = {'segment': args.segment_v, 'shift': args.shift_v}
     else:
         kw_cv = {'segment': args.segment, 'shift': args.shift}
     train_set = Wavset(root, metadata_train, args.sources,

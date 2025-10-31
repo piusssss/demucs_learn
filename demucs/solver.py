@@ -327,7 +327,7 @@ class Solver(object):
                 sources = sources[:, 1:]
 
             if not train and self.args.valid_apply:
-                estimate = apply_model(self.model, mix, split=self.args.test.split, overlap=0)
+                estimate = apply_model(self.model, mix, split=self.args.test.split, overlap=self.args.test.overlap)
             else:
                 estimate = self.dmodel(mix)
             if train and hasattr(self.model, 'transform_target'):
