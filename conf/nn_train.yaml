@@ -1,6 +1,3 @@
-# HTDemucs Advanced 完整训练配置
-# 集成了 Multi-resolution STFT, ResUNet++, Linear Attention 三大创新
-
 defaults:
   - _self_
   - dset: musdb44

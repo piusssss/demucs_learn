@@ -1,239 +1,393 @@
-"""
-HTDemucs Advanced: Integrating ResUNet++, Multi-resolution STFT, and Linear Attention
-for improved music source separation.
-"""
-
 import math
+
+from openunmix.filtering import wiener
 import torch
 from torch import nn
 from torch.nn import functional as F
 from fractions import Fraction
 from einops import rearrange
-from typing import List, Optional
 
-# Import our new components
-from .linear_attention import LinearTransformerEncoder, elu_feature_map
-from .multi_resolution_stft import MultiResolutionSTFT, MultiResolutionEncoder
-from .resunet_plus import ResUNetPlus
+from .transformer_n import CrossTransformerEncoder
 
-# Import existing components
 from .demucs import rescale_module
 from .states import capture_init
 from .spec import spectro, ispectro
-from .hdemucs import pad1d, ScaledEmbedding
+from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, MultiWrap, HDecLayer
 
 
 class HTDemucs_n(nn.Module):
-    """
-    Advanced HTDemucs with three key innovations:
-    1. ResUNet++ for better feature extraction with residual connections
-    2. Multi-resolution STFT for capturing different time-frequency characteristics  
-    3. Linear Attention for efficient long-sequence modeling
-    
-    This model maintains the hybrid time-frequency approach of HTDemucs while
-    incorporating state-of-the-art techniques for improved performance and efficiency.
-    """
-    
+
     @capture_init
     def __init__(
         self,
         sources,
-        # Audio parameters
+        # Channels
         audio_channels=2,
-        samplerate=44100,
-        segment=10,
-        # Multi-resolution STFT parameters
-        n_ffts=[512, 1024, 2048, 4096],
-        stft_hop_lengths=None,
-        stft_fusion_method='attention',
-        # ResUNet++ parameters
-        resunet_base_channels=64,
-        resunet_depth=4,
-        resunet_use_se=True,
-        resunet_use_attention=True,
-        # Linear Attention parameters
-        linear_attn_layers=5,
-        linear_attn_heads=8,
-        linear_attn_dim_head=64,
-        linear_attn_feature_map=None,
-        # Traditional parameters (for compatibility)
         channels=48,
         channels_time=None,
         growth=2,
+        # STFT
         nfft=4096,
         wiener_iters=0,
         end_iters=0,
         wiener_residual=False,
         cac=True,
-        # Hybrid model parameters
+        # Main structure
         depth=4,
         rewrite=True,
+        # Frequency branch
+        multi_freqs=None,
+        multi_freqs_depth=3,
+        freq_emb=0.2,
+        emb_scale=10,
+        emb_smooth=True,
+        # Convolutions
         kernel_size=8,
-        stride=4,
         time_stride=2,
+        stride=4,
         context=1,
         context_enc=0,
         # Normalization
         norm_starts=4,
         norm_groups=4,
-        # DConv parameters (for compatibility)
+        # DConv residual branch
         dconv_mode=1,
         dconv_depth=2,
         dconv_comp=8,
         dconv_init=1e-3,
-        # Bottom channels
+        # Before the Transformer
         bottom_channels=0,
-        # Other parameters
+        # Transformer
+        t_layers=5,
+        t_emb="sin",
+        t_hidden_scale=4.0,
+        t_heads=8,
+        t_dropout=0.0,
+        t_max_positions=10000,
+        t_norm_in=True,
+        t_norm_in_group=False,
+        t_group_norm=False,
+        t_norm_first=True,
+        t_norm_out=True,
+        t_max_period=10000.0,
+        t_weight_decay=0.0,
+        t_lr=None,
+        t_layer_scale=True,
+        t_gelu=True,
+        t_weight_pos_embed=1.0,
+        t_sin_random_shift=0,
+        t_cape_mean_normalize=True,
+        t_cape_augment=True,
+        t_cape_glob_loc_scale=[5000.0, 1.0, 1.4],
+        t_sparse_self_attn=False,
+        t_sparse_cross_attn=False,
+        t_mask_type="diag",
+        t_mask_random_seed=42,
+        t_sparse_attn_window=500,
+        t_global_window=100,
+        t_sparsity=0.95,
+        t_auto_sparsity=False,
+        # ------ Particuliar parameters
+        t_cross_first=False,
+        # Weight init
         rescale=0.1,
+        # Metadata
+        samplerate=44100,
+        segment=10,
         use_train_segment=True,
-        **kwargs
     ):
+       
         super().__init__()
-        
+        self.cac = cac
+        self.wiener_residual = wiener_residual
         self.audio_channels = audio_channels
         self.sources = sources
         self.kernel_size = kernel_size
         self.context = context
         self.stride = stride
         self.depth = depth
+        self.bottom_channels = bottom_channels
         self.channels = channels
         self.samplerate = samplerate
         self.segment = segment
+        self.use_train_segment = use_train_segment
+        self.nfft = nfft
+        self.hop_length = nfft // 4
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
-        self.wiener_residual = wiener_residual
-        self.cac = cac
-        self.n_ffts = n_ffts
-        self.use_train_segment = use_train_segment
-        
-        # Multi-resolution STFT
-        self.multi_stft = MultiResolutionSTFT(
-            n_ffts=n_ffts,
-            hop_lengths=stft_hop_lengths,
-            window='hann',
-            center=True,
-            normalized=False,
-            onesided=True
-        )
-        
-        # Multi-resolution encoder
-        stft_output_dim = channels * 2  # Match with traditional branch
-        self.multi_res_encoder = MultiResolutionEncoder(
-            n_ffts=n_ffts,
-            channels=audio_channels,
-            hidden_dim=channels,
-            output_dim=stft_output_dim,
-            fusion_method=stft_fusion_method
-        )
-        
-        # Calculate frequency dimension for ResUNet++
-        freq_bins = nfft // 2 + 1
-        
-        # ResUNet++ for frequency branch
-        # Calculate input channels: real/imag (2) + multi-res features
-        freq_input_channels = audio_channels * 2 + stft_output_dim  # 2*2 + 96 = 100
-        self.freq_resunet = ResUNetPlus(
-            in_channels=freq_input_channels,
-            out_channels=channels,
-            base_channels=resunet_base_channels,
-            depth=resunet_depth,
-            use_se=resunet_use_se,
-            use_attention=resunet_use_attention
-        )
-        
-        # Time branch - redesigned for better channel management
-        self.time_encoder = nn.ModuleList()
-        self.time_decoder = nn.ModuleList()
-        
-        # Calculate channel progression
-        time_channels = [channels]
-        ch = channels
+        self.freq_emb = None
+        assert wiener_iters == end_iters
+
+        self.encoder = nn.ModuleList()
+        self.decoder = nn.ModuleList()
+
+        self.tencoder = nn.ModuleList()
+        self.tdecoder = nn.ModuleList()
+
+        chin = audio_channels
+        chin_z = chin  # number of channels for the freq branch
+        if self.cac:
+            chin_z *= 2
+        chout = channels_time or channels
+        chout_z = channels
+        freqs = nfft // 2
+
         for index in range(depth):
-            ch *= growth
-            time_channels.append(ch)
-        
-        # Build encoder
-        for index in range(depth):
-            in_ch = audio_channels if index == 0 else time_channels[index]
-            out_ch = time_channels[index + 1]
-            
-            encode = []
-            encode += [
-                nn.Conv1d(in_ch, out_ch, kernel_size, stride),
-                nn.ReLU(),
-                nn.Conv1d(out_ch, out_ch * 2, 1), 
-                nn.GLU(1),
-            ]
-            self.time_encoder.append(nn.Sequential(*encode))
-        
-        # Build decoder (reverse order)
-        for index in range(depth):
-            in_ch = time_channels[depth - index]
-            
-            decode = []
-            decode += [nn.Conv1d(in_ch, in_ch * 2, 1), nn.GLU(1)]
-            
-            if index < depth - 1:
-                out_ch = time_channels[depth - index - 1]
-                decode.append(nn.ConvTranspose1d(in_ch, out_ch, kernel_size, stride))
-            else:
-                # Final layer outputs to sources
-                decode.append(nn.ConvTranspose1d(in_ch, audio_channels * len(sources), kernel_size, stride))
-            
-            self.time_decoder.append(nn.Sequential(*decode))
-        
-        # Linear Attention Transformer for long-sequence modeling
-        transformer_dim = time_channels[-1]  # Use the final encoder dimension
-        self.linear_transformer = LinearTransformerEncoder(
-            dim=transformer_dim,
-            depth=linear_attn_layers,
-            heads=linear_attn_heads,
-            dim_head=linear_attn_dim_head,
-            ff_mult=4,
-            dropout=0.0,
-            feature_map=linear_attn_feature_map or elu_feature_map,
-            norm_first=True
-        )
-        
-        # CAC mode projection (for when CAC is enabled)
-        self.cac_projection = nn.Conv1d(audio_channels * 2, channels, 1)
-        
-        # Frequency-Time fusion
-        final_time_ch = time_channels[-1]
-        self.freq_projection = nn.Sequential(
-            nn.Conv1d(channels, final_time_ch, 1),
-            nn.ReLU()
-        )
-        
-        self.freq_time_fusion = nn.Sequential(
-            nn.Conv1d(final_time_ch * 2, final_time_ch, 1),  # freq + time
-            nn.ReLU(),
-            nn.Conv1d(final_time_ch, final_time_ch, 1)
-        )
-        
-        # Final processing
-        self.final_conv = nn.Conv1d(ch, ch, 1)
-        
-        # Initialize weights
-        self.apply(self._init_weights)
+            norm = index >= norm_starts
+            freq = freqs > 1
+            stri = stride
+            ker = kernel_size
+            if not freq:
+                assert freqs == 1
+                ker = time_stride * 2
+                stri = time_stride
+
+            pad = True
+            last_freq = False
+            if freq and freqs <= kernel_size:
+                ker = freqs
+                pad = False
+                last_freq = True
+
+            kw = {
+                "kernel_size": ker,
+                "stride": stri,
+                "freq": freq,
+                "pad": pad,
+                "norm": norm,
+                "rewrite": rewrite,
+                "norm_groups": norm_groups,
+                "dconv_kw": {
+                    "depth": dconv_depth,
+                    "compress": dconv_comp,
+                    "init": dconv_init,
+                    "gelu": True,
+                },
+            }
+            kwt = dict(kw)
+            kwt["freq"] = 0
+            kwt["kernel_size"] = kernel_size
+            kwt["stride"] = stride
+            kwt["pad"] = True
+            kw_dec = dict(kw)
+            multi = False
+            if multi_freqs and index < multi_freqs_depth:
+                multi = True
+                kw_dec["context_freq"] = False
+
+            if last_freq:
+                chout_z = max(chout, chout_z)
+                chout = chout_z
+
+            enc = HEncLayer(
+                chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
+            )
+            if freq:
+                tenc = HEncLayer(
+                    chin,
+                    chout,
+                    dconv=dconv_mode & 1,
+                    context=context_enc,
+                    empty=last_freq,
+                    **kwt
+                )
+                self.tencoder.append(tenc)
+
+            if multi:
+                enc = MultiWrap(enc, multi_freqs)
+            self.encoder.append(enc)
+            if index == 0:
+                chin = self.audio_channels * len(self.sources)
+                chin_z = chin
+                if self.cac:
+                    chin_z *= 2
+            dec = HDecLayer(
+                chout_z,
+                chin_z,
+                dconv=dconv_mode & 2,
+                last=index == 0,
+                context=context,
+                **kw_dec
+            )
+            if multi:
+                dec = MultiWrap(dec, multi_freqs)
+            if freq:
+                tdec = HDecLayer(
+                    chout,
+                    chin,
+                    dconv=dconv_mode & 2,
+                    empty=last_freq,
+                    last=index == 0,
+                    context=context,
+                    **kwt
+                )
+                self.tdecoder.insert(0, tdec)
+            self.decoder.insert(0, dec)
+
+            chin = chout
+            chin_z = chout_z
+            chout = int(growth * chout)
+            chout_z = int(growth * chout_z)
+            if freq:
+                if freqs <= kernel_size:
+                    freqs = 1
+                else:
+                    freqs //= stride
+            if index == 0 and freq_emb:
+                self.freq_emb = ScaledEmbedding(
+                    freqs, chin_z, smooth=emb_smooth, scale=emb_scale
+                )
+                self.freq_emb_scale = freq_emb
+
         if rescale:
             rescale_module(self, reference=rescale)
-    
-    def _init_weights(self, module):
-        """Initialize weights for better training stability."""
-        if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.ConvTranspose2d)):
-            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0)
-        elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
-            nn.init.constant_(module.weight, 1)
-            nn.init.constant_(module.bias, 0)
-        elif isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, 0, 0.01)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0)
-    
-    def valid_length(self, length: int) -> int:
+
+        transformer_channels = channels * growth ** (depth - 1)
+        if bottom_channels:
+            self.channel_upsampler = nn.Conv1d(
+                transformer_channels, bottom_channels, 1
+            )
+            self.channel_downsampler = nn.Conv1d(
+                bottom_channels, transformer_channels, 1
+            )
+            self.channel_upsampler_t = nn.Conv1d(
+                transformer_channels, bottom_channels, 1
+            )
+            self.channel_downsampler_t = nn.Conv1d(
+                bottom_channels, transformer_channels, 1
+            )
+
+            transformer_channels = bottom_channels
+
+        if t_layers > 0:
+            self.crosstransformer = CrossTransformerEncoder(
+                dim=transformer_channels,
+                emb=t_emb,
+                hidden_scale=t_hidden_scale,
+                num_heads=t_heads,
+                num_layers=t_layers,
+                cross_first=t_cross_first,
+                dropout=t_dropout,
+                max_positions=t_max_positions,
+                norm_in=t_norm_in,
+                norm_in_group=t_norm_in_group,
+                group_norm=t_group_norm,
+                norm_first=t_norm_first,
+                norm_out=t_norm_out,
+                max_period=t_max_period,
+                weight_decay=t_weight_decay,
+                lr=t_lr,
+                layer_scale=t_layer_scale,
+                gelu=t_gelu,
+                sin_random_shift=t_sin_random_shift,
+                weight_pos_embed=t_weight_pos_embed,
+                cape_mean_normalize=t_cape_mean_normalize,
+                cape_augment=t_cape_augment,
+                cape_glob_loc_scale=t_cape_glob_loc_scale,
+                sparse_self_attn=t_sparse_self_attn,
+                sparse_cross_attn=t_sparse_cross_attn,
+                mask_type=t_mask_type,
+                mask_random_seed=t_mask_random_seed,
+                sparse_attn_window=t_sparse_attn_window,
+                global_window=t_global_window,
+                sparsity=t_sparsity,
+                auto_sparsity=t_auto_sparsity,
+            )
+        else:
+            self.crosstransformer = None
+
+    def _spec(self, x):
+        hl = self.hop_length
+        nfft = self.nfft
+        x0 = x  # noqa
+
+        # We re-pad the signal in order to keep the property
+        # that the size of the output is exactly the size of the input
+        # divided by the stride (here hop_length), when divisible.
+        # This is achieved by padding by 1/4th of the kernel size (here nfft).
+        # which is not supported by torch.stft.
+        # Having all convolution operations follow this convention allow to easily
+        # align the time and frequency branches later on.
+        assert hl == nfft // 4
+        le = int(math.ceil(x.shape[-1] / hl))
+        pad = hl // 2 * 3
+        x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
+
+        z = spectro(x, nfft, hl)[..., :-1, :]
+        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
+        z = z[..., 2: 2 + le]
+        return z
+
+    def _ispec(self, z, length=None, scale=0):
+        hl = self.hop_length // (4**scale)
+        z = F.pad(z, (0, 0, 0, 1))
+        z = F.pad(z, (2, 2))
+        pad = hl // 2 * 3
+        le = hl * int(math.ceil(length / hl)) + 2 * pad
+        x = ispectro(z, hl, length=le)
+        x = x[..., pad: pad + length]
+        return x
+
+    def _magnitude(self, z):
+        # return the magnitude of the spectrogram, except when cac is True,
+        # in which case we just move the complex dimension to the channel one.
+        if self.cac:
+            B, C, Fr, T = z.shape
+            m = torch.view_as_real(z).permute(0, 1, 4, 2, 3)
+            m = m.reshape(B, C * 2, Fr, T)
+        else:
+            m = z.abs()
+        return m
+
+    def _mask(self, z, m):
+        # Apply masking given the mixture spectrogram `z` and the estimated mask `m`.
+        # If `cac` is True, `m` is actually a full spectrogram and `z` is ignored.
+        niters = self.wiener_iters
+        if self.cac:
+            B, S, C, Fr, T = m.shape
+            out = m.view(B, S, -1, 2, Fr, T).permute(0, 1, 2, 4, 5, 3)
+            out = torch.view_as_complex(out.contiguous())
+            return out
+        if self.training:
+            niters = self.end_iters
+        if niters < 0:
+            z = z[:, None]
+            return z / (1e-8 + z.abs()) * m
+        else:
+            return self._wiener(m, z, niters)
+
+    def _wiener(self, mag_out, mix_stft, niters):
+        # apply wiener filtering from OpenUnmix.
+        init = mix_stft.dtype
+        wiener_win_len = 300
+        residual = self.wiener_residual
+
+        B, S, C, Fq, T = mag_out.shape
+        mag_out = mag_out.permute(0, 4, 3, 2, 1)
+        mix_stft = torch.view_as_real(mix_stft.permute(0, 3, 2, 1))
+
+        outs = []
+        for sample in range(B):
+            pos = 0
+            out = []
+            for pos in range(0, T, wiener_win_len):
+                frame = slice(pos, pos + wiener_win_len)
+                z_out = wiener(
+                    mag_out[sample, frame],
+                    mix_stft[sample, frame],
+                    niters,
+                    residual=residual,
+                )
+                out.append(z_out.transpose(-1, -2))
+            outs.append(torch.cat(out, dim=0))
+        out = torch.view_as_complex(torch.stack(outs, 0))
+        out = out.permute(0, 4, 3, 2, 1).contiguous()
+        if residual:
+            out = out[:, :-1]
+        assert list(out.shape) == [B, S, C, Fq, T]
+        return out.to(init)
+
+    def valid_length(self, length: int):
         """
         Return a length that is appropriate for evaluation.
         In our case, always return the training length, unless
@@ -248,17 +402,8 @@ class HTDemucs_n(nn.Module):
                     f"Given length {length} is longer than "
                     f"training length {training_length}")
         return training_length
-    
+
     def forward(self, mix):
-        """
-        Forward pass through the advanced HTDemucs model.
-        
-        Args:
-            mix: Input mixture [B, C, T]
-            
-        Returns:
-            Separated sources [B, S, C, T] where S is number of sources
-        """
         length = mix.shape[-1]
         length_pre_pad = None
         if self.use_train_segment:
@@ -269,166 +414,126 @@ class HTDemucs_n(nn.Module):
                 if mix.shape[-1] < training_length:
                     length_pre_pad = mix.shape[-1]
                     mix = F.pad(mix, (0, training_length - length_pre_pad))
-        
-        mono = mix.mean(dim=1, keepdim=True)  # [B, 1, T]
-        
-        # === FREQUENCY BRANCH ===
-        
-        # 1. Multi-resolution STFT
-        multi_stfts = self.multi_stft(mix)  # List of [B, C, F, T'] tensors
-        multi_res_features = self.multi_res_encoder(multi_stfts)  # [B, channels*2, T']
-        
-        # 2. Traditional single-resolution STFT for compatibility
-        # Use a smaller STFT size to avoid padding issues with short sequences
-        stft_size = min(self.n_ffts[-1], mix.shape[-1] // 8)  # More conservative
-        stft_size = max(stft_size, 512)  # Minimum STFT size
-        z = spectro(mix, stft_size, stft_size // 4, 0)  # pad=0 to avoid padding issues
-        
-        # Convert complex to real/imag
-        if self.cac:
-            # Complex as channels - simplified approach
-            B, C, Fq, T_prime = z.shape
-            z_real_imag = torch.stack([z.real, z.imag], dim=2)  # [B, C, 2, F, T']
-            z = z_real_imag.permute(0, 1, 3, 2, 4).contiguous()  # [B, C, F, 2, T']
-            z = z.view(B, C * 2, Fq, T_prime)  # [B, C*2, F, T']
-        else:
-            z = torch.stack([z.real, z.imag], dim=2)  # [B, C, 2, F, T']
-            z = z.permute(0, 1, 3, 2, 4).contiguous()  # [B, C, F, 2, T']
-            B, C, F, _, T_prime = z.shape
-            z = z.view(B, C * 2, F, T_prime)  # [B, C*2, F, T']
-        
-        # 3. Combine multi-resolution features with traditional STFT
-        if not self.cac:
-            # Interpolate multi-res features to match STFT time dimension
-            if multi_res_features.shape[-1] != z.shape[-1]:
-                multi_res_features = nn.functional.interpolate(
-                    multi_res_features, size=z.shape[-1], 
-                    mode='linear', align_corners=False
-                )
-            
-            # Expand multi-res features to match frequency dimension
-            multi_res_expanded = multi_res_features.unsqueeze(2).expand(-1, -1, z.shape[2], -1)
-            
-            # Concatenate along channel dimension
-            freq_input = torch.cat([z, multi_res_expanded], dim=1)  # [B, C*2+multi_dim, F, T']
-            
-            # 4. Process with ResUNet++
-            freq_features = self.freq_resunet(freq_input)  # [B, channels, F, T']
-            
-            # Global average pooling over frequency to get 1D time features
-            freq_out = freq_features.mean(dim=2)  # [B, channels, T']
-        else:
-            # For CAC mode, simplified processing
-            # z is [B, C*2, F, T'], average over frequency and project
-            freq_averaged = z.mean(dim=2)  # [B, C*2, T']
-            freq_out = self.cac_projection(freq_averaged)  # [B, channels, T']
-        
-        # === TIME BRANCH ===
-        
-        time_features = []
+        z = self._spec(mix)
+        mag = self._magnitude(z).to(mix.device)
+        x = mag
+
+        B, C, Fq, T = x.shape
+
+        # unlike previous Demucs, we always normalize because it is easier.
+        mean = x.mean(dim=(1, 2, 3), keepdim=True)
+        std = x.std(dim=(1, 2, 3), keepdim=True)
+        x = (x - mean) / (1e-5 + std)
+        # x will be the freq. branch input.
+
+        # Prepare the time branch input.
         xt = mix
-        
-        # Encoder
-        for layer in self.time_encoder:
-            xt = layer(xt)
-            time_features.append(xt)
-        
-        # === LINEAR ATTENTION TRANSFORMER ===
-        
-        # Prepare input for transformer: [B, C, T] -> [B, T, C]
-        transformer_input = xt.transpose(1, 2)
-        
-        # Apply linear attention transformer
-        transformer_out = self.linear_transformer(transformer_input)  # [B, T, C]
-        
-        # Convert back: [B, T, C] -> [B, C, T]
-        xt = transformer_out.transpose(1, 2)
-        
-        # === FREQUENCY-TIME FUSION ===
-        
-        # Project frequency features to match time dimension
-        freq_projected = self.freq_projection(freq_out)  # [B, final_time_ch, T']
-        
-        # Interpolate frequency features to match time features
-        if freq_projected.shape[-1] != xt.shape[-1]:
-            freq_projected = nn.functional.interpolate(freq_projected, size=xt.shape[-1], mode='linear', align_corners=False)
-        
-        # Fuse frequency and time features
-        fused_input = torch.cat([freq_projected, xt], dim=1)  # [B, final_time_ch*2, T]
-        fused = self.freq_time_fusion(fused_input)  # [B, final_time_ch, T]
-        
-        # Add residual connection
-        xt = xt + fused
-        
-        # Final processing
-        xt = self.final_conv(xt)
-        
-        # === TIME DECODER ===
-        
-        # Decoder with skip connections
-        skip_features = list(reversed(time_features[:-1]))  # Exclude the last (deepest) feature
-        
-        for i, layer in enumerate(self.time_decoder):
-            xt = layer(xt)
-            
-            # Add skip connection if available and not the final layer
-            if i < len(skip_features):
-                skip = skip_features[i]
-                if xt.shape[-1] != skip.shape[-1]:
-                    xt = nn.functional.interpolate(xt, size=skip.shape[-1], mode='linear', align_corners=False)
-                # Only add skip if channel dimensions match
-                if xt.shape[1] == skip.shape[1]:
-                    xt = xt + skip
-        
-        # Reshape to [B, S, C, T]
+        meant = xt.mean(dim=(1, 2), keepdim=True)
+        stdt = xt.std(dim=(1, 2), keepdim=True)
+        xt = (xt - meant) / (1e-5 + stdt)
+
+        # okay, this is a giant mess I know...
+        saved = []  # skip connections, freq.
+        saved_t = []  # skip connections, time.
+        lengths = []  # saved lengths to properly remove padding, freq branch.
+        lengths_t = []  # saved lengths for time branch.
+        for idx, encode in enumerate(self.encoder):
+            lengths.append(x.shape[-1])
+            inject = None
+            if idx < len(self.tencoder):
+                # we have not yet merged branches.
+                lengths_t.append(xt.shape[-1])
+                tenc = self.tencoder[idx]
+                xt = tenc(xt)
+                if not tenc.empty:
+                    # save for skip connection
+                    saved_t.append(xt)
+                else:
+                    # tenc contains just the first conv., so that now time and freq.
+                    # branches have the same shape and can be merged.
+                    inject = xt
+            x = encode(x, inject)
+            if idx == 0 and self.freq_emb is not None:
+                # add frequency embedding to allow for non equivariant convolutions
+                # over the frequency axis.
+                frs = torch.arange(x.shape[-2], device=x.device)
+                emb = self.freq_emb(frs).t()[None, :, :, None].expand_as(x)
+                x = x + self.freq_emb_scale * emb
+
+            saved.append(x)
+        if self.crosstransformer:
+            if self.bottom_channels:
+                b, c, f, t = x.shape
+                x = rearrange(x, "b c f t-> b c (f t)")
+                x = self.channel_upsampler(x)
+                x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                xt = self.channel_upsampler_t(xt)
+
+            x, xt = self.crosstransformer(x, xt)
+
+            if self.bottom_channels:
+                x = rearrange(x, "b c f t-> b c (f t)")
+                x = self.channel_downsampler(x)
+                x = rearrange(x, "b c (f t)-> b c f t", f=f)
+                xt = self.channel_downsampler_t(xt)
+
+        for idx, decode in enumerate(self.decoder):
+            skip = saved.pop(-1)
+            x, pre = decode(x, skip, lengths.pop(-1))
+            # `pre` contains the output just before final transposed convolution,
+            # which is used when the freq. and time branch separate.
+
+            offset = self.depth - len(self.tdecoder)
+            if idx >= offset:
+                tdec = self.tdecoder[idx - offset]
+                length_t = lengths_t.pop(-1)
+                if tdec.empty:
+                    assert pre.shape[2] == 1, pre.shape
+                    pre = pre[:, :, 0]
+                    xt, _ = tdec(pre, None, length_t)
+                else:
+                    skip = saved_t.pop(-1)
+                    xt, _ = tdec(xt, skip, length_t)
+
+        # Let's make sure we used all stored skip connections.
+        assert len(saved) == 0
+        assert len(lengths_t) == 0
+        assert len(saved_t) == 0
+
         S = len(self.sources)
-        B, _, T = xt.shape
-        xt = xt.view(B, S, self.audio_channels, T)
-        
-        # Restore original length if padding was applied
-        if length_pre_pad is not None:
-            xt = xt[..., :length_pre_pad]
-        
-        return xt
-    
-    def separate(self, wav, shifts=1, split=True, overlap=0.25, callback=None, device=None):
-        """
-        Separate audio with optional test-time augmentation.
-        This method handles longer sequences efficiently using the linear attention.
-        """
-        if device is None:
-            device = next(iter(self.parameters())).device
-        
-        wav = wav.to(device)
-        
-        if shifts == 1:
-            # Single pass - can handle longer sequences due to linear attention
-            with torch.no_grad():
-                sources = self(wav.unsqueeze(0))[0]
-            return sources
+        x = x.view(B, S, -1, Fq, T)
+        x = x * std[:, None] + mean[:, None]
+
+        # to cpu as mps doesnt support complex numbers
+        # demucs issue #435 ##432
+        # NOTE: in this case z already is on cpu
+        # TODO: remove this when mps supports complex numbers
+        x_is_mps = x.device.type == "mps"
+        if x_is_mps:
+            x = x.cpu()
+
+        zout = self._mask(z, x)
+        if self.use_train_segment:
+            if self.training:
+                x = self._ispec(zout, length)
+            else:
+                x = self._ispec(zout, training_length)
         else:
-            # Multiple shifts for better quality
-            # The linear attention allows us to process longer segments
-            return self._separate_with_shifts(wav, shifts, split, overlap, callback, device)
-    
-    def _separate_with_shifts(self, wav, shifts, split, overlap, callback, device):
-        """Handle separation with multiple shifts and overlapping."""
-        # Implementation similar to original HTDemucs but can handle longer sequences
-        # This is a simplified version - full implementation would include
-        # proper shift handling and overlap-add reconstruction
-        
-        sources_acc = torch.zeros(len(self.sources), *wav.shape, device=device)
-        
-        for shift in range(shifts):
-            # Apply random shift
-            offset = torch.randint(0, wav.shape[-1] // 8, (1,)).item()
-            shifted_wav = torch.roll(wav, offset, dims=-1)
-            
-            with torch.no_grad():
-                sources = self(shifted_wav.unsqueeze(0))[0]
-            
-            # Reverse shift
-            sources = torch.roll(sources, -offset, dims=-1)
-            sources_acc += sources
-        
-        return sources_acc / shifts
+            x = self._ispec(zout, length)
+
+        # back to mps device
+        if x_is_mps:
+            x = x.to("mps")
+
+        if self.use_train_segment:
+            if self.training:
+                xt = xt.view(B, S, -1, length)
+            else:
+                xt = xt.view(B, S, -1, training_length)
+        else:
+            xt = xt.view(B, S, -1, length)
+        xt = xt * stdt[:, None] + meant[:, None]
+        x = xt + x
+        if length_pre_pad:
+            x = x[..., :length_pre_pad]
+        return x

@@ -8,15 +8,15 @@ from demucs.htdemucs_d2 import HTDemucs_d2
 from demucs.htdemucs_d3 import HTDemucs_d3
 from demucs.htdemucs_d4 import HTDemucs_d4
 from demucs.htdemucs_c import HTDemucs_c
-from demucs.htdemucs_n import HTDemucs_n
 from demucs.htdemucs import HTDemucs
+from demucs.htdemucs_n import HTDemucs_n
 from thop import profile
 
 # Model parameters (these should match your model's __init__ parameters)
 samplerate = 44100
 speed = True  
 # Instantiate the model with default parameters (let it use its own default segment)
-model = HTDemucs(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
+model = HTDemucs_n(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
 segment = model.segment  # Use the model's actual segment parameter
 
 # Move model to GPU if available
