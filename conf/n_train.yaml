@@ -1,0 +1,200 @@
+# HTDemucs Advanced 完整训练配置
+# 集成了 Multi-resolution STFT, ResUNet++, Linear Attention 三大创新
+
+defaults:
+  - _self_
+  - dset: musdb44
+  - svd: default
+  - variant: default
+  - override hydra/hydra_logging: colorlog
+  - override hydra/job_logging: colorlog
+
+dummy:
+
+# --- 数据集配置 ---
+dset:
+  musdb: null
+  musdb_samplerate: 44100
+  use_musdb: false
+  musdb_path: null
+  wav: E:/CODE/python_code/inst/demucs/data/instrumental
+  wav2: false
+  segment: 12                                   # 12秒分段，充分利用Linear Attention
+  shift: 6
+  segment_v: null
+  shift_v: null
+  train_valid: false
+  full_cv: true
+  samplerate: 44100
+  channels: 2
+  normalize: true
+  metadata: ./metadata
+  sources: ['instrumental']
+  valid_samples:
+  backend: null
+
+# --- 测试/评估配置 ---
+test:
+  save: true
+  best: true
+  workers: 1
+  every: 100
+  split: true
+  shifts: 1
+  overlap: 0.25
+  sdr: false
+  metric: 'loss'
+  nonhq: null
+
+# --- 核心训练参数 ---
+epochs: 15                    # 增加训练轮数，复杂架构需要更多时间收敛
+batch_size: 1                 # 保持较小batch size，复杂架构内存需求大
+max_batches:
+
+# --- 优化器配置 ---
+optim:
+  lr: 2e-4                    # 较小学习率，稳定训练复杂架构
+  momentum: 0.9
+  beta2: 0.999
+  loss: l1
+  optim: adam
+  weight_decay: 1e-4          # 权重衰减防止过拟合
+  clip_grad: 1.0              # 梯度裁剪稳定训练
+
+seed: 42
+debug: false
+valid_apply: true
+flag:
+save_every:
+weights: [1.0]
+
+# --- 数据增强配置 ---
+augment:
+  shift_same: true
+  repitch:
+    proba: 0.0                # 暂时关闭repitch，确保训练稳定性
+    max_pitch: 2
+    max_tempo: 12
+  remix:
+    proba: 0                  # 关闭remix
+    group_size: 4
+  scale:
+    proba: 0.8                # 保留scale增强
+    min: 0.25
+    max: 1.25
+  flip: true
+
+# --- 继续训练配置 ---
+continue_from: null
+continue_pretrained: null
+pretrained_repo: null
+continue_best: true
+continue_opt: false
+
+# --- 其他杂项配置 ---
+misc:
+  num_workers: 0
+  num_prints: 10
+  show: false
+  verbose: false
+
+# --- EMA配置 ---
+ema:
+  epoch: []
+  batch: [0.9995]
+
+use_train_segment: true
+model_segment: 12             # 匹配segment长度
+model: htdemucs_n            # 使用HTDemucs_n模型
+
+# --- HTDemucs_n 完整模型配置 ---
+htdemucs_n:
+  
+  # Multi-resolution STFT parameters - 四个分辨率全覆盖
+  n_ffts: [512, 1024, 2048, 4096]
+  stft_hop_lengths: null                       # 使用默认hop length
+  stft_fusion_method: 'attention'              # 注意力机制融合多分辨率特征
+  
+  # ResUNet++ parameters - 完整配置
+  resunet_base_channels: 64                    # 充足的基础通道数
+  resunet_depth: 4                             # 标准深度
+  resunet_use_se: true                         # 启用Squeeze-Excitation
+  resunet_use_attention: true                  # 启用注意力门控
+  
+  # Linear Attention parameters - 完整配置
+  linear_attn_layers: 5                        # 充足的Transformer层数
+  linear_attn_heads: 8                         # 标准注意力头数
+  linear_attn_dim_head: 64                     # 标准头维度
+  linear_attn_feature_map: null                # 使用默认ELU特征映射
+  
+  # Traditional HTDemucs parameters
+  channels: 48                                 # 基础通道数
+  channels_time: null
+  growth: 2                                    # 通道增长率
+  nfft: 4096                                   # 传统STFT窗口大小
+  wiener_iters: 0
+  end_iters: 0
+  wiener_residual: false
+  cac: true                                    # Complex as Channels
+  
+  # Network architecture
+  depth: 4                                     # 网络深度
+  rewrite: true
+  kernel_size: 8
+  stride: 4
+  time_stride: 2
+  context: 1
+  context_enc: 0
+  
+  # Normalization
+  norm_starts: 4
+  norm_groups: 4
+  
+  # DConv residual branch (for compatibility)
+  dconv_mode: 1
+  dconv_depth: 2
+  dconv_comp: 8
+  dconv_init: 1e-3
+  
+  # Bottom channels (before transformer)
+  bottom_channels: 0
+  
+  # Weight initialization
+  rescale: 0.1
+
+# --- SVD配置 ---
+svd:
+  penalty: 0
+  min_size: 0.1
+  dim: 1
+  niters: 2
+  powm: false
+  proba: 1
+  conv_only: false
+  convtr: false
+  bs: 1
+
+# --- 量化配置 ---
+quant:
+  diffq:
+  qat:
+  min_size: 0.2
+  group_size: 8
+
+# --- Dora配置 ---
+dora:
+  dir: outputs
+  exclude: ["misc.*", "slurm.*", 'test.reval', 'flag', 'dset.backend']
+
+# --- SLURM配置 ---
+slurm:
+  time: 4320
+  constraint: volta32gb
+  setup: ['module load cudnn/v8.4.1.50-cuda.11.6 NCCL/2.11.4-6-cuda.11.6 cuda/11.6']
+
+# --- Hydra配置 ---
+hydra:
+  job_logging:
+    formatters:
+      colorlog:
+        datefmt: "%m-%d %H:%M:%S"

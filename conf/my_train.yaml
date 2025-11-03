@@ -17,10 +17,10 @@ dset:
   musdb_samplerate: 44100                      # MUSDB 数据集的原始采样率。
   use_musdb: false                            # 不使用MUSDB数据集
   musdb_path: null                            # 明确设置MUSDB路径为null
-  wav: E:/CODE/python_code/inst/demucs/data/instrumental          # 你的自定义WAV训练集路径
+  wav: E:/CODE/python_code/inst/demucs/data/remix          # 你的自定义WAV训练集路径
   wav2: false                                  # 第二个自定义 WAV 训练集的根目录路径。
-  segment: 10                                   # 保持4秒分段，平衡性能和内存使用
-  shift: 5                                    # 训练时，对每个片段做多少次随机移位（shift）的数据增强。
+  segment: 4                                   # 保持4秒分段，平衡性能和内存使用
+  shift: 1                                    # 训练时，对每个片段做多少次随机移位（shift）的数据增强。
   segment_v: null                                   
   shift_v: null  
   train_valid: false                           # 是否从训练集中切分一部分作为验证集。
@@ -48,8 +48,8 @@ test:
   nonhq: null       # 禁用MUSDB测试集评估
 
 # --- 核心训练参数 ---
-epochs: 8              # 训练总轮次：回到成功配置，给更多训练时间   nsdr13.807  13.243
-batch_size: 1           # 批大小：保持不变
+epochs: 4              # 训练总轮次：回到成功配置，给更多训练时间   nsdr13.807  13.243
+batch_size: 2           # 批大小：保持不变
 max_batches:        # 限制每个epoch最多处理100个batch，快速测试
 
 # --- 优化器 (Optimizer) 配置 ---
@@ -106,7 +106,7 @@ misc:
 # Batch 级别的 EMA 在 GPU 上计算以保证速度。
 ema:
   epoch: []        # 在 epoch 级别应用的 EMA 衰减率列表，回到成功配置。
-  batch: [0.9995]       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
+  batch: []       # 在 batch 级别应用的 EMA 衰减率列表，回到成功配置。
 
 use_train_segment: true  # (待移除的旧参数)
 model_segment: 10        # 覆盖模型的分段参数，4秒 * 4 = 16秒

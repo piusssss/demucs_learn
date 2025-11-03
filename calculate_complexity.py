@@ -8,6 +8,7 @@ from demucs.htdemucs_d2 import HTDemucs_d2
 from demucs.htdemucs_d3 import HTDemucs_d3
 from demucs.htdemucs_d4 import HTDemucs_d4
 from demucs.htdemucs_c import HTDemucs_c
+from demucs.htdemucs_n import HTDemucs_n
 from demucs.htdemucs import HTDemucs
 from thop import profile
 
