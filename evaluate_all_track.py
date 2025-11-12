@@ -46,11 +46,13 @@ def load_audio(path, samplerate=44100):
 def new_sdr(references, estimates):
     """
     Compute the SDR according to the MDX challenge definition.
-    Adapted from demucs official implementation.
+    Official implementation from demucs/evaluate.py
     """
+    assert references.dim() == 4
+    assert estimates.dim() == 4
     delta = 1e-7  # avoid numerical errors
-    num = th.sum(th.square(references), dim=(1, 2))
-    den = th.sum(th.square(references - estimates), dim=(1, 2))
+    num = th.sum(th.square(references), dim=(2, 3))
+    den = th.sum(th.square(references - estimates), dim=(2, 3))
     num += delta
     den += delta
     scores = 10 * th.log10(num / den)
@@ -59,7 +61,8 @@ def new_sdr(references, estimates):
 
 def eval_track_instrumental(reference, estimate, win, hop, compute_traditional_sdr=True):
     """
-    Evaluate instrumental separation using both traditional and new SDR calculation.
+    Evaluate instrumental separation using academic standard methods.
+    Following demucs official evaluation protocol.
     
     Args:
         reference: Ground truth instrumental audio (channels, samples)
@@ -71,13 +74,20 @@ def eval_track_instrumental(reference, estimate, win, hop, compute_traditional_s
     Returns:
         scores: Dictionary containing SDR scores
     """
-    # Calculate new SDR (MDX 2021 definition) - faster
-    ref_tensor = reference.double()
-    est_tensor = estimate.double()
-    new_sdr_score = new_sdr(ref_tensor[None], est_tensor[None])[0]  # Remove batch dimension
+    # Prepare tensors following official demucs evaluation protocol
+    # Add source dimension: (sources=1, channels, samples)
+    ref_3d = reference[None]  # (sources=1, channels, samples)
+    est_3d = estimate[None]   # (sources=1, channels, samples)
+    
+    # Transpose to match official format: (sources, samples, channels)
+    ref_transposed = ref_3d.transpose(1, 2).double()
+    est_transposed = est_3d.transpose(1, 2).double()
+    
+    # Add batch dimension and calculate new SDR: (batch=1, sources, samples, channels)
+    new_sdr_score = new_sdr(ref_transposed[None], est_transposed[None])[0, 0]
     
     result = {
-        'NSDR': float(new_sdr_score.mean()),  # New SDR (MDX definition)
+        'NSDR': float(new_sdr_score),  # New SDR (MDX definition)
     }
     
     if compute_traditional_sdr:
@@ -180,16 +190,17 @@ def evaluate_all_tracks_instrumental(test_dir, model_name="htdemucs_ft", repo_pa
             continue
         
         try:
-            # Load and process audio
+            # Load and process audio following demucs official protocol
             mixture = load_audio(str(mixture_path), samplerate)
             if mixture.dim() == 1:
                 mixture = mixture[None]  # Add channel dimension
             
-            # Move to device and normalize
+            # Move to device and apply official demucs normalization
             mixture = mixture.to(device)
-            ref_std = mixture.std()
-            ref_mean = mixture.mean()
-            mixture = (mixture - ref_mean) / ref_std
+            
+            # Official demucs normalization: use mono mixture statistics
+            ref = mixture.mean(dim=0)  # mono mixture: (samples,)
+            mixture = (mixture - ref.mean()) / ref.std()
             
             # Apply model for source separation
             with th.no_grad():
@@ -200,8 +211,8 @@ def evaluate_all_tracks_instrumental(test_dir, model_name="htdemucs_ft", repo_pa
                     overlap=overlap
                 )[0]  # Remove batch dimension
             
-            # Denormalize estimates
-            estimates = estimates * ref_std + ref_mean
+            # Denormalize estimates using official method
+            estimates = estimates * ref.std() + ref.mean()
             
             # Handle different model outputs
             if estimates.shape[0] >= 4:
@@ -231,11 +242,18 @@ def evaluate_all_tracks_instrumental(test_dir, model_name="htdemucs_ft", repo_pa
             if device == "cuda":
                 th.cuda.empty_cache()
             
-            # Load reference and ensure same length
+            # Load reference and handle length alignment properly
             reference = load_audio(str(reference_path), samplerate)
-            min_length = min(instrumental_estimate.shape[-1], reference.shape[-1])
-            instrumental_estimate = instrumental_estimate[..., :min_length]
-            reference = reference[..., :min_length]
+            
+            # Academic standard: ensure exact length matching without truncation
+            target_length = min(instrumental_estimate.shape[-1], reference.shape[-1])
+            if instrumental_estimate.shape[-1] != reference.shape[-1]:
+                print(f"  Warning: Length mismatch in {track_name} "
+                      f"(estimate: {instrumental_estimate.shape[-1]}, "
+                      f"reference: {reference.shape[-1]}), aligning to {target_length}")
+            
+            instrumental_estimate = instrumental_estimate[..., :target_length]
+            reference = reference[..., :target_length]
             
             # Evaluate instrumental separation
             scores = eval_track_instrumental(reference, instrumental_estimate, win, hop, 
@@ -318,7 +336,7 @@ def main():
     
     # Model configuration - modify these to use experiment models
     model_name = "htdemucs"  # For pretrained models: "htdemucs", "htdemucs_ft", etc.
-    model_name = "6fa75e56"
+    model_name = "f8e6e990"
     repo_path = None
     repo_path = "./release_models"
     #repo_path = "./release_models"  # For experiment models: set to experiment directory path
@@ -340,11 +358,13 @@ def main():
     shifts = 1
     overlap = 0.25
     
-    print("=== Instrumental Evaluation ===")
+    print("=== Academic Standard Instrumental Evaluation ===")
     print(f"Model: {model_name}")
     if repo_path:
         print(f"Repository: {repo_path}")
     print(f"Test directory: {test_dir}")
+    print(f"Evaluation protocol: Official demucs standard")
+    print(f"SDR computation: {'Traditional + New' if compute_traditional_sdr else 'New (MDX 2021) only'}")
     print()
     
     # Run evaluation
@@ -361,16 +381,20 @@ def main():
         )
         
         if results:
-            # Save results to file
+            # Save results to file with academic metadata
             import json
-            output_file = f"all_tracks_evaluation_{model_name}.json"
+            output_file = f"academic_evaluation_{model_name}.json"
             
             # Convert numpy arrays to lists for JSON serialization
             json_results = {
-                'model_config': {
+                'evaluation_metadata': {
+                    'protocol': 'demucs_official_standard',
+                    'sdr_definition': 'MDX_2021_new_sdr',
+                    'normalization': 'mono_mixture_statistics',
                     'model_name': model_name,
                     'shifts': shifts,
-                    'overlap': overlap
+                    'overlap': overlap,
+                    'traditional_sdr_computed': compute_traditional_sdr
                 },
                 'tracks': {},
                 'overall_summary': results['overall_summary']

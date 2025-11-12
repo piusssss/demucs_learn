@@ -206,12 +206,12 @@ def get_wav_datasets(args, name='wav'):
     # 如果是单源训练，训练集也加载mixture.wav
     if len(args.sources) == 1:
         train_set = Wavset(train_path, train, [MIXTURE] + list(args.sources),
-                           segment=args.segment, shift=args.shift,
+                           segment=args.segment, shift=args.data_shift,
                            samplerate=args.samplerate, channels=args.channels,
                            normalize=args.normalize)
     else:
         train_set = Wavset(train_path, train, args.sources,
-                           segment=args.segment, shift=args.shift,
+                           segment=args.segment, shift=args.data_shift,
                            samplerate=args.samplerate, channels=args.channels,
                            normalize=args.normalize)
     valid_set = Wavset(valid_path, valid, [MIXTURE] + list(args.sources),
@@ -252,7 +252,7 @@ def get_musdb_wav_datasets(args):
     else:
         kw_cv = {'segment': args.segment, 'shift': args.shift}
     train_set = Wavset(root, metadata_train, args.sources,
-                       segment=args.segment, shift=args.shift,
+                       segment=args.segment, shift=args.date_shift,
                        samplerate=args.samplerate, channels=args.channels,
                        normalize=args.normalize)
     valid_set = Wavset(root, metadata_valid, [MIXTURE] + list(args.sources),

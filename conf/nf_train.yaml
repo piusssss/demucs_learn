@@ -16,8 +16,8 @@ dset:
   musdb_path: null
   wav: E:/CODE/python_code/inst/demucs/data/instrumental
   wav2: false
-  segment: 9   
-  data_shift: 9                                # 
+  segment: 4.4   
+  data_shift: 3                                # 
   shift: 1                                      # 
   segment_v: null
   shift_v: null
@@ -31,8 +31,8 @@ dset:
   valid_samples:
   backend: null
 
-epochs: 2                    # 
-batch_size: 1                 # 
+epochs: 7                    # 
+batch_size: 2                 # 
 max_batches: 
 
 optim:
@@ -41,22 +41,22 @@ optim:
   beta2: 0.999
   loss: l1
   optim: adam
-  weight_decay: 5e-5
+  weight_decay: 0
   clip_grad: 0              
 
 augment:
   shift_same: true
   repitch:
-    proba: 0                #
+    proba: 0.1                #
     max_pitch: 1
     max_tempo: 10
   remix:
     proba: 0                  # 
     group_size: 4
   scale:
-    proba: 1                # 
-    min: 0.25
-    max: 1.8
+    proba: 0.8                # 
+    min: 0.35
+    max: 1.5
   flip: true
 
 # --- 继续训练配置 ---
@@ -79,15 +79,15 @@ ema:
   batch: [0.9995]
 
 model_segment: 10             # 匹配默认segment长度
-model: htdemucs_n            # 使用HTDemucs_n模型
+model: htdemucs_nf            # 使用HTDemucs_n模型
 
 # --- HTDemucs_n 默认模型配置 ---
-htdemucs_n:
+htdemucs_nf:
   use_train_segment: true
-  channels: 24                                
+  channels: 48                                
   channels_time: null
   growth: 2
-  
+  nfft_list: [1024, 2048, 4096, 8192, 16384]
   # STFT参数
   wiener_iters: 0
   end_iters: 0
@@ -99,61 +99,25 @@ htdemucs_n:
   rewrite: true
   
   # 频率分支
-  freq_emb: 0.3
+  freq_emb: 0.5
   emb_scale: 10
   emb_smooth: true
   
   # 卷积参数
   kernel_size: 8
-  time_stride: 2
   stride: 4
   context: 1
   context_enc: 0
   
   # 归一化
-  norm_starts: 3
+  norm_starts: 4
   norm_groups: 4
   
   # DConv残差分支
-  dconv_mode: 1
+  dconv_mode: 0
   dconv_depth: 2
   dconv_comp: 8
   dconv_init: 1e-3
-  
-  # Transformer前的通道数
-  bottom_channels: 0
-  
-  # Transformer配置 (当前模型默认值)
-  t_layers: 5
-  t_emb: "sin"
-  t_hidden_scale: 4.0                         # 当前模型的FFN缩放因子
-  t_heads: 8
-  t_dropout: 0.0
-  t_max_positions: 10000
-  t_norm_in: true
-  t_norm_in_group: false
-  t_group_norm: false
-  t_norm_first: true
-  t_norm_out: true
-  t_max_period: 10000.0
-  t_weight_decay: 0.0
-  t_lr: null
-  t_layer_scale: true
-  t_gelu: true
-  t_weight_pos_embed: 1.0
-  t_sin_random_shift: 0
-  t_cape_mean_normalize: true
-  t_cape_augment: true
-  t_cape_glob_loc_scale: [5000.0, 1.0, 1.4]
-  t_sparse_self_attn: false
-  t_sparse_cross_attn: false
-  t_mask_type: "diag"
-  t_mask_random_seed: 42
-  t_sparse_attn_window: 500
-  t_global_window: 100
-  t_sparsity: 0.95
-  t_auto_sparsity: false
-  t_cross_first: false
   
   # 权重初始化
   rescale: 0.1
