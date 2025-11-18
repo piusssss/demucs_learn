@@ -87,12 +87,13 @@ class HTDemucs_nf(nn.Module):
         
         # Multi-resolution fusion convolution
         num_groups = len(self.sources) * self.audio_channels
+        fusion_conv_wide=129
         self.fusion_conv = nn.Conv2d(
             in_channels=num_groups, 
             out_channels=num_groups,  
-            kernel_size=[self.num_resolutions, 1],  
+            kernel_size=[self.num_resolutions, fusion_conv_wide],  
             stride=1,
-            padding=0,
+            padding=[0,(fusion_conv_wide-1)//2],
             groups=num_groups//self.audio_channels  
         )
 

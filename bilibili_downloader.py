@@ -77,15 +77,44 @@ def download_wav(url):
         
         print("✅ 下载完成!")
         
-        # 列出下载的文件
-        print("\n📋 下载的文件:")
-        for file in output_path.glob("*.wav"):
-            print(f"  - {file.name}")
+        # 找到下载的文件
+        wav_files = list(output_path.glob("*.wav"))
+        if not wav_files:
+            print("❌ 未找到下载的WAV文件")
+            return False
         
-        return True
+        # 获取最新的文件
+        latest_file = max(wav_files, key=lambda p: p.stat().st_mtime)
+        print(f"\n📋 下载的文件: {latest_file.name}")
+        
+        return str(latest_file)
         
     except Exception as e:
         print(f"❌ 下载失败: {e}")
+        return None
+
+
+def run_demucs(wav_file):
+    """运行 demucs 分离人声"""
+    print(f"\n🎤 开始分离人声...")
+    
+    cmd = [
+        'demucs',
+        '-n', 'htdemucs_ft',
+        '--shifts=1',
+        '--two-stems', 'vocals',
+        '--overlap', '0.25',
+        wav_file
+    ]
+    
+    print(f"执行命令: {' '.join(cmd)}")
+    
+    try:
+        subprocess.run(cmd, check=True)
+        print("✅ 人声分离完成!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 分离失败: {e}")
         return False
 
 def main():
@@ -115,10 +144,16 @@ def main():
             continue
         
         # 开始下载
-        success = download_wav(url)
+        wav_file = download_wav(url)
         
-        if success:
+        if wav_file:
             print("🎉 下载成功!")
+            
+            # 运行 demucs
+            if run_demucs(wav_file):
+                print("🎉 处理完成!")
+            else:
+                print("😞 分离失败")
         else:
             print("😞 下载失败，请重试")
         

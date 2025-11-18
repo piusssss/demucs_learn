@@ -23,7 +23,7 @@ class HTDemucs_n(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=48,
+        channels=36,
         channels_time=None,
         growth=2,
         # STFT
