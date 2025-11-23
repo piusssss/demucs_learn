@@ -37,6 +37,11 @@ class Solver(object):
         self.quantizer = states.get_quantizer(self.model, args.quant, self.optimizer)
         self.dmodel = distrib.wrap(model)
         self.device = next(iter(self.model.parameters())).device
+        
+        # 余弦退火学习率调度参数
+        self.warmup_epochs = getattr(args.optim, 'warmup', 2)
+        self.min_lr = getattr(args.optim, 'min_lr', 1e-5)
+        self.initial_lr = args.optim.lr
 
         # Exponential moving average of the model, either updated every batch or epoch.
         # The best model from all the EMAs and the original one is kept based on the valid
@@ -135,6 +140,19 @@ class Solver(object):
             if self.args.continue_opt:
                 self.optimizer.load_state_dict(package['optimizer'])
 
+    def _get_lr_for_epoch(self, epoch):
+        """计算指定epoch的学习率"""
+        import math
+        if epoch < self.warmup_epochs:
+            return self.initial_lr * (epoch + 1) / self.warmup_epochs
+        progress = (epoch - self.warmup_epochs) / max(1, self.args.epochs - self.warmup_epochs)
+        return max(self.min_lr, self.initial_lr * 0.5 * (1 + math.cos(math.pi * progress)))
+    
+    def _set_lr(self, lr):
+        """设置优化器学习率"""
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+    
     def _format_train(self, metrics: dict) -> dict:
         """Formatting for train/valid metrics."""
         losses = {
@@ -190,16 +208,18 @@ class Solver(object):
                     logger.info(bold(f"Test Summary | Epoch {epoch + 1} | {_summary(formatted)}"))
 
         # Print current learning rate at the start of training
-        if len(self.history) < self.args.epochs:
-            current_lr = self.optimizer.param_groups[0]['lr']
-            logger.info(f"Current Epoch Learning Rate: {current_lr:.2e}")
-        
         epoch = 0
         for epoch in range(len(self.history), self.args.epochs):
+            # 设置当前epoch的学习率
+            current_lr = self._get_lr_for_epoch(epoch)
+            self._set_lr(current_lr)
+            
             # Train one epoch
             self.model.train()  # Turn on BatchNorm & Dropout
             metrics = {}
+            
             logger.info('-' * 70)
+            logger.info(f"Epoch {epoch + 1}/{self.args.epochs} | Learning Rate: {current_lr:.2e}")
             logger.info("Training...")
             metrics['train'] = self._run_one_epoch(epoch)
             formatted = self._format_train(metrics['train'])

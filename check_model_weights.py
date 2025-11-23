@@ -30,13 +30,30 @@ def check_fusion_weights(model_path):
         raw_weights = state_dict['fusion_weights']
         normalized_weights = F.softmax(raw_weights, dim=0)
         
+        # 动态获取分辨率数量
+        num_resolutions = len(raw_weights)
+        
         print("✅ 模型加载成功!")
         print(f"\n📊 融合权重分析:")
+        print(f"分辨率数量: {num_resolutions}")
         print(f"原始权重: {raw_weights}")
         print(f"归一化权重: {normalized_weights}")
         
+        # 尝试从模型配置中获取实际的NFFT值
+        nfft_list = None
+        if 'nfft_list' in checkpoint:
+            nfft_list = checkpoint['nfft_list']
+        elif hasattr(checkpoint.get('model', None), 'nfft_list'):
+            nfft_list = checkpoint['model'].nfft_list
+        
+        # 生成分辨率标签
+        if nfft_list is not None:
+            resolutions = [f'{nfft}Hz' for nfft in nfft_list]
+        else:
+            # 默认标签
+            resolutions = [f'Resolution_{i+1}' for i in range(num_resolutions)]
+        
         print(f"\n🎯 分辨率权重分布:")
-        resolutions = ['2048Hz', '4096Hz', '8192Hz']
         for i, (res, weight) in enumerate(zip(resolutions, normalized_weights)):
             print(f"  {res}: {weight:.4f} ({weight*100:.1f}%)")
         
@@ -45,7 +62,8 @@ def check_fusion_weights(model_path):
         print(f"\n🏆 最偏好分辨率: {resolutions[max_idx]} ({normalized_weights[max_idx]*100:.1f}%)")
         
         # 检查权重是否均匀分布
-        is_uniform = torch.allclose(normalized_weights, torch.ones(3)/3, atol=1e-3)
+        uniform_weight = 1.0 / num_resolutions
+        is_uniform = torch.allclose(normalized_weights, torch.ones(num_resolutions) * uniform_weight, atol=1e-3)
         if is_uniform:
             print("⚠️  权重接近均匀分布，可能还未充分训练")
         else:
@@ -62,7 +80,7 @@ def check_fusion_weights(model_path):
         
         # 计算权重熵（衡量分布均匀程度）
         entropy = -(normalized_weights * torch.log(normalized_weights + 1e-8)).sum()
-        max_entropy = torch.log(torch.tensor(3.0))  # 均匀分布的最大熵
+        max_entropy = torch.log(torch.tensor(float(num_resolutions)))  # 均匀分布的最大熵
         print(f"\n📈 权重熵: {entropy:.4f} / {max_entropy:.4f} ({entropy/max_entropy*100:.1f}%)")
         if entropy/max_entropy > 0.95:
             print("   → 权重分布很均匀")
@@ -76,7 +94,7 @@ def check_fusion_weights(model_path):
 
 def main():
     # 默认检查路径
-    default_path = "outputs/xps/89b3ca28"
+    default_path = "outputs/xps/48f6aa15"
     
     # 查找模型文件
     base_dir = Path(default_path)

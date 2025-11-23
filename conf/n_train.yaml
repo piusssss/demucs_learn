@@ -10,38 +10,40 @@ dummy:
 
 # --- 数据集配置 ---
 dset:
-  musdb: null
-  musdb_samplerate: 44100
-  use_musdb: false
-  musdb_path: null
-  wav: E:/CODE/python_code/inst/demucs/data/instrumental
-  wav2: false
-  segment: 9   
-  data_shift: 9                                # 
-  shift: 1                                      # 
-  segment_v: null
-  shift_v: null
-  train_valid: false
-  full_cv: true
-  samplerate: 44100
-  channels: 2
-  normalize: true
-  metadata: ./metadata
-  sources: ['instrumental']
-  valid_samples:
-  backend: null
+  musdb: null                                
+  musdb_samplerate: 44100                      
+  use_musdb: false                            
+  musdb_path: null                           
+  wav: E:/CODE/python_code/inst/demucs/data/musdb18
+  wav2: false                                 
+  segment: 4   
+  data_shift: 4                               #
+  shift: 1                                    
+  segment_v: null                                   
+  shift_v: null  
+  train_valid: false                      
+  full_cv: true                            
+  samplerate: 44100                         
+  channels: 2                       
+  normalize: true                
+  metadata: ./metadata                
+  sources: ['drums', 'bass', 'other', 'vocals']      
+  valid_samples:                              
+  backend: null                             
 
 epochs: 2                    # 
 batch_size: 1                 # 
-max_batches: 
+max_batches: 100
 
 optim:
-  lr: 8e-4                    #
+  lr: 1e-3
+  warmup: 2      # warmup epochs
+  min_lr: 1e-5   # 最小学习率                 #
   momentum: 0.9
   beta2: 0.999
   loss: l1
   optim: adam
-  weight_decay: 5e-5
+  weight_decay: 0
   clip_grad: 0              
 
 augment:
@@ -54,7 +56,7 @@ augment:
     proba: 0                  # 
     group_size: 4
   scale:
-    proba: 1                # 
+    proba: 0                # 
     min: 0.25
     max: 1.8
   flip: true
@@ -69,17 +71,18 @@ continue_opt: false
 # --- 其他杂项配置 ---
 misc:
   num_workers: 0
-  num_prints: 20
+  num_prints: 10
   show: false
   verbose: false
 
 # --- EMA配置 ---
 ema:
   epoch: []
-  batch: [0.9995]
+  batch: []
 
 model_segment: 10             # 匹配默认segment长度
-model: htdemucs_n            # 使用HTDemucs_n模型
+#model: htdemucs_n            
+model: htdemucs_n            
 
 # --- HTDemucs_n 默认模型配置 ---
 htdemucs_n:
@@ -181,7 +184,7 @@ quant:
 # --- Dora配置 ---
 dora:
   dir: outputs
-  exclude: ["misc.*", "slurm.*", 'test.reval', 'flag', 'dset.backend']
+  exclude: ["misc.*", "slurm.*", 'test.reval', 'flag', 'dset.backend', 'optim.lr', 'epochs']
 
 # --- SLURM配置 ---
 slurm:
@@ -214,4 +217,4 @@ debug: false
 valid_apply: true
 flag:
 save_every:
-weights: [1.0]
+weights: [1., 1., 1., 1.]

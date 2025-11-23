@@ -30,7 +30,7 @@
 ### 数据问题
 
 网络数据源存在严重问题：
-- 非官方数据格式不一致
+- 非官方数据不一致
 - 重采样、标准化后数据不对齐
 - 导致训练失败
 
@@ -50,7 +50,7 @@
 
 ### 目标
 
-设计改进架构，超越原版性能。
+尝试设计改进架构，超越原版性能。
 
 ### 实验设置
 
@@ -63,23 +63,14 @@
 
 ### 实现变体
 
-**官方 HTDemucs 基线性能**：
+**官方 HTDemucs 基线性能**：（segment=10）
 - FLOPs: 137.52 G
 - 参数量: 20.93 M
 - 处理时间: 6.98s / 180s 音频
 
-共设计实现 11 个变体：
+共设计实现至少 11 个变体：
 
-| 变体 | 改进方向 | 文件 |
-|------|---------|------|
-| htdemucs_n | 基础改进 | htdemucs_n.py, transformer_n.py |
-| htdemucs_c | 通道注意力 | htdemucs_c.py, transformer_c.py |
-| htdemucs_d/d2/d3/d4 | 深度网络（4 次迭代） | htdemucs_d*.py, transformer_d*.py |
-| htdemucs_i | 信息流优化 | htdemucs_i.py, transformer_i.py |
-| htdemucs_s | 稀疏注意力 | htdemucs_s.py |
-| htdemucs_p | 深度增强 + 分支融合重构 | htdemucs_p.py, transformer_p.py |
-| htdemucs_nc/nf | 组合改进 | htdemucs_nc.py, htdemucs_nf.py |
-
+注：所有性能指标与通道数高度相关，仅作参考。
 #### htdemucs_p 设计思路
 
 **核心改进**：
@@ -135,6 +126,7 @@ x = alpha * transformer_output + (1 - alpha) * residual
 **设计理念**：
 - 纯卷积架构，去除注意力机制
 - 通过更大的感受野补偿 Transformer 的全局建模能力
+
 - 在拟合测试中效果优异
 
 **性能指标**：
@@ -270,7 +262,7 @@ x = alpha * transformer_output + (1 - alpha) * residual
    - 带权分离回各分辨率
    - 加上融合前的残差
 3. 最终输出：
-   - 三个分辨率结果再次加权融合
+   - 三个分辨率结果再次加权融合  （后改为nf的卷积融合）
 
 **可学习融合权重**：
 ```python
@@ -283,9 +275,9 @@ weight_momentum = 0.9  # 动量平滑
 - **首个较明显超越原版的变体**
 
 **性能指标**：
-- FLOPs: 180.75 G
-- 参数量: 21.56 M
-- 处理时间: 7.20s / 180s 音频
+- FLOPs: 86.27  G
+- 参数量: 9.61 M
+- 处理时间: 5.33s / 180s 音频
 
 #### htdemucs_nc 设计思路
 
@@ -343,20 +335,25 @@ weight_momentum = 0.9  # 动量平滑
 - 参数量: 27.39 M
 - 处理时间: 7.41s / 180s 音频
 
+#### htdemucs_nn 设计思路
 
+**核心改进**：
+- 基于 htdemucs_n 的进一步优化，仅将权重融合分离全部改为卷积
 
+**实验结果**：
+- 计算量与参数增加许多，但效果差不多
 
 ### 实验结果
 
 - 前期变体：与原版持平或略低
-- **最终突破**：多频率分辨率窗口 + 线性 Transformer 超越原版
+- **最终突破**：多频率分辨率窗口 超越原版
 
 ### 其他探索
 
-- ONNX 导出（不兼容）
-- TorchScript 转换
+- ONNX 导出（不兼容，主要由于stft的复数计算）
+- TorchScript 转换 （反而在gpu下推理更慢）
 - 模型量化
-- 该架构的音乐生成
+- 该架构的音乐生成，风格迁移
 （未深入）
 
 ---
@@ -373,31 +370,39 @@ weight_momentum = 0.9  # 动量平滑
 - 学习率：手动根据情况调整
 - 优化器：Adam
 - 损失函数：L1 Loss
+- 其余参数： 略
 
 
-### 性能对比
+### 性能对比（musdb18_hq test单源）
 
- 待更新
+htdemucs(官方预训练):
+Tracks evaluated: 50
+Overall SDR Mean: 18.411 dB
+Overall SDR Median: 16.347 dB
+Overall SDR Std: 9.786 dB
+
+htdemucs(同一训练策略下):
+Tracks evaluated: 50                  Tracks evaluated: 50   
+Overall SDR Mean: 14.219 dB           Overall SDR Mean: 14.675 dB
+Overall SDR Median: 11.140 dB         Overall SDR Median: 11.198 dB
+Overall SDR Std: 9.826 dB             Overall SDR Std: 10.316 dB
+### 10epoch退火收敛                  13epoch重启快速退火
+htdemucs_n(同一训练策略下):
+Tracks evaluated: 50                  Tracks evaluated: 50
+Overall SDR Mean: 17.454 dB           Overall SDR Mean: 18.183 dB
+Overall SDR Median: 12.470 dB         Overall SDR Median: 12.556 dB
+Overall SDR Std: 12.708 dB            Overall SDR Std: 13.523 dB
+htdemucs_nn(同一训练策略下):
+Tracks evaluated: 50                  Tracks evaluated: 50
+Overall SDR Mean: 18.323 dB           Overall SDR Mean: 18.474 dB
+Overall SDR Median: 12.435 dB         Overall SDR Median: 12.561 dB
+Overall SDR Std: 13.744 dB            Overall SDR Std: 13.898 dB
+
+
 
 ---
 
-## 项目结构
-
-```
-conf/                    # 训练配置
-  ├── n_train.yaml
-  ├── c_train.yaml
-  ├── d_train.yaml, d2_train.yaml, d3_train.yaml, d4_train.yaml
-  ├── i_train.yaml
-  ├── s_train.yaml
-  ├── nc_train.yaml, nf_train.yaml
-
-demucs/                  # 模型实现
-  ├── htdemucs.py        # 原版
-  ├── htdemucs_*.py      # 11 个变体
-  ├── transformer.py     # 原版
-  ├── transformer_*.py   # 变体 Transformer
-
+常用脚本：
 calculate_complexity.py  # 计算模型复杂度
 train_windows_fixed.py   # 训练脚本
 evaluate_instrumental.py # 评估脚本
@@ -416,7 +421,7 @@ evaluate_instrumental.py # 评估脚本
 2. **线性 Transformer**
    - 降低计算复杂度
    - 保持性能同时提升效率
-
+   - （原版transformer在该任务下对性能消耗很大，但收益似乎并没有这么显著。或许在大规模训练中才能体现？）
 
 
 ---
