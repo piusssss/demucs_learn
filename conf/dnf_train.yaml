@@ -1,0 +1,185 @@
+defaults:
+  - _self_
+  - dset: musdb44
+  - svd: default
+  - variant: default
+  - override hydra/hydra_logging: colorlog
+  - override hydra/job_logging: colorlog
+
+dummy:
+
+# --- 数据集配置 ---
+dset:
+  musdb: null                                
+  musdb_samplerate: 44100                      
+  use_musdb: false                            
+  musdb_path: null                           
+  wav: E:/CODE/python_code/inst/demucs/data/musdb18
+  wav2: false                                 
+  segment: 4   
+  data_shift: 4                               #
+  shift: 1                                    
+  segment_v: null                                   
+  shift_v: null  
+  train_valid: false                      
+  full_cv: true                            
+  samplerate: 44100                         
+  channels: 2                       
+  normalize: true                
+  metadata: ./metadata                
+  sources: ['drums', 'bass', 'other', 'vocals']      
+  valid_samples:                              
+  backend: null                             
+
+epochs: 10                    # 
+batch_size: 2                 # 
+max_batches: 400
+
+optim:
+  lr: 1e-3
+  warmup: 2      # warmup epochs
+  min_lr: 1e-5   # 最小学习率                 #
+  momentum: 0.9
+  beta2: 0.999
+  loss: l1
+  optim: adam
+  weight_decay: 0
+  clip_grad: 0              
+
+augment:
+  shift_same: true
+  repitch:
+    proba: 0                #
+    max_pitch: 1
+    max_tempo: 10
+  remix:
+    proba: 0                  # 
+    group_size: 4
+  scale:
+    proba: 0                # 
+    min: 0.25
+    max: 1.8
+  flip: true
+
+# --- 继续训练配置 ---
+continue_from: null
+continue_pretrained: null
+pretrained_repo: null
+continue_best: true
+continue_opt: false
+
+# --- 其他杂项配置 ---
+misc:
+  num_workers: 0
+  num_prints: 10
+  show: false
+  verbose: false
+
+# --- EMA配置 ---
+ema:
+  epoch: []
+  batch: []
+
+model_segment: 10             # 匹配默认segment长度
+#model: htdemucs_n            
+model: htdemucs_dnf            # 使用HTDemucs_n模型
+
+# --- HTDemucs_n 默认模型配置 ---
+htdemucs_dnf:
+  use_train_segment: true
+  channels: 16
+  t_channels: 64                           
+  channels_time: null
+  growth: 2
+  nfft_list: [1024, 2048, 4096, 8192, 16384]
+  # STFT参数
+  cac: true
+  
+  # 网络架构
+  depth: 4
+  t_depth: 2
+  rewrite: true
+  
+  # 频率分支
+  freq_emb: 0.3
+  emb_scale: 10
+  emb_smooth: true
+  
+  # 卷积参数
+  kernel_size: 8
+  stride: 4
+  t_kernel_size: 17
+  t_stride: 4
+  context: 1
+  context_enc: 0
+  
+  # 归一化
+  norm_starts: 4
+  norm_groups: 4
+  
+  # DConv残差分支
+  dconv_mode: 0
+  dconv_depth: 2
+  dconv_comp: 8
+  dconv_init: 1e-3
+  
+  # 权重初始化
+  rescale: 0.1
+  
+
+# --- SVD配置 ---
+svd:
+  penalty: 0
+  min_size: 0.1
+  dim: 1
+  niters: 2
+  powm: false
+  proba: 1
+  conv_only: false
+  convtr: false
+  bs: 1
+
+# --- 量化配置 ---
+quant:
+  diffq:
+  qat:
+  min_size: 0.2
+  group_size: 8
+
+# --- Dora配置 ---
+dora:
+  dir: outputs
+  exclude: ["misc.*", "slurm.*", 'test.reval', 'flag', 'dset.backend', 'optim.lr', 'epochs']
+
+# --- SLURM配置 ---
+slurm:
+  time: 4320
+  constraint: volta32gb
+  setup: ['module load cudnn/v8.4.1.50-cuda.11.6 NCCL/2.11.4-6-cuda.11.6 cuda/11.6']
+
+# --- Hydra配置 ---
+hydra:
+  job_logging:
+    formatters:
+      colorlog:
+        datefmt: "%m-%d %H:%M:%S"
+        
+# --- 测试/评估配置 ---
+test:
+  save: true
+  best: true
+  workers: 1
+  every: 100
+  split: true
+  shifts: 1
+  overlap: 0.25
+  sdr: false
+  metric: 'loss'
+  nonhq: null
+  
+seed: 42
+debug: false
+valid_apply: true
+flag:
+save_every:
+weights: [1., 1., 1., 1.]

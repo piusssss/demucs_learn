@@ -27,6 +27,7 @@ class HTDemucs_nn(nn.Module):
         channels_time=None,
         growth=2,
         # STFT
+        nfft_list=[2048, 4096, 8192],  # Multi-resolution STFT window sizes
         wiener_iters=0,
         end_iters=0,
         wiener_residual=False,
@@ -45,7 +46,7 @@ class HTDemucs_nn(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=3,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
@@ -108,79 +109,35 @@ class HTDemucs_nn(nn.Module):
         self.samplerate = samplerate
         self.segment = segment
         self.use_train_segment = use_train_segment
-        # Multi-resolution window sizes
-        self.window_sizes = [2048, 4096, 8192]
-        self.hop_lengths = [ws // 4 for ws in self.window_sizes]
+        
+        # Multi-resolution window sizes (configurable)
+        self.nfft_list = nfft_list
+        self.num_resolutions = len(nfft_list)
+        self.hop_lengths = [nfft // 4 for nfft in nfft_list]
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
         self.freq_emb = None
         assert wiener_iters == end_iters
 
-        # Multi-resolution encoders
-        self.encoder_2048 = nn.ModuleList()
-        self.encoder_4096 = nn.ModuleList()
-        self.encoder_8192 = nn.ModuleList()
-        
-        # Multi-resolution decoders
-        self.decoder_2048 = nn.ModuleList()
-        self.decoder_4096 = nn.ModuleList()
-        self.decoder_8192 = nn.ModuleList()
+        # Multi-resolution encoders and decoders (dynamic based on nfft_list)
+        self.encoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
+        self.decoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
 
         self.tencoder = nn.ModuleList()
         self.tdecoder = nn.ModuleList()
         
-        # Multi-resolution fusion using convolution (no learnable weights)
-        # Use transposed convolution to split fused features back to 3 resolutions
+        # Multi-resolution fusion weights with momentum smoothing (for bottleneck)
+        self.fusion_weights = nn.Parameter(torch.ones(self.num_resolutions) / self.num_resolutions)
+        # EMA buffer for smooth weight updates (similar to optimizer momentum)
+        self.register_buffer('weight_ema', torch.ones(self.num_resolutions) / self.num_resolutions)
+        self.weight_momentum = 0.9  
         
-        # Get transformer output channels
-        transformer_channels = channels * growth ** (depth - 1)
-        if bottom_channels:
-            fusion_channels = bottom_channels
-        else:
-            fusion_channels = transformer_channels
-        
-        # Pre-transformer: 3 resolutions → 1 fused (Conv2d)
-        # Calculate frequency dimension after all encoder layers
-        # For 4096 resolution: freq = (4096 // 2) // (stride ** depth)
-        nfft_target = 4096
-        freq_after_encoders = (nfft_target // 2) // (stride ** depth)
-        
-        # Total channels after reshaping C and F dimensions
-        total_fusion_channels = fusion_channels * freq_after_encoders
-        channels_per_group = freq_after_encoders
-        
-        # Input: [B, C*F, 3, T] → Output: [B, C*F, 1, T]
-        self.pre_transformer_fusion = nn.Conv2d(
-            in_channels=total_fusion_channels,
-            out_channels=total_fusion_channels,
-            kernel_size=[3, 129],
-            stride=1,
-            padding=[0, 64],
-            groups=total_fusion_channels // channels_per_group  # Similar to final fusion
+        # Source-specific fusion weights for final time-domain fusion
+        self.final_fusion_weights = nn.Parameter(
+            torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions
         )
-        
-        # Post-transformer: 1 fused → 3 resolutions (ConvTranspose2d)
-        # Input: [B, C*F, 1, T] → Output: [B, C*F, 3, T]
-        self.post_transformer_split = nn.ConvTranspose2d(
-            in_channels=total_fusion_channels,
-            out_channels=total_fusion_channels,
-            kernel_size=[3, 129],
-            stride=1,
-            padding=[0, 64],
-            groups=total_fusion_channels // channels_per_group  # Similar to final fusion
-        )
-        
-        # Final time-domain fusion (keep this as is)
-        num_groups = len(self.sources) * self.audio_channels
-        fusion_conv_wide = 129
-        self.fusion_conv = nn.Conv2d(
-            in_channels=num_groups, 
-            out_channels=num_groups,  
-            kernel_size=[3, fusion_conv_wide],  
-            stride=1,
-            padding=[0, (fusion_conv_wide-1)//2],
-            groups=num_groups//self.audio_channels  
-        )
+        self.register_buffer('final_weight_ema', torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions)
+        self.final_weight_momentum = 0.9  
         
         chin = audio_channels
         chin_z = chin  # number of channels for the freq branch
@@ -218,16 +175,13 @@ class HTDemucs_nn(nn.Module):
             kwt["pad"] = True
             kw_dec = dict(kw)
 
-            # Create three resolution encoders
-            enc_2048 = HEncLayer(
-                chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
-            )
-            enc_4096 = HEncLayer(
-                chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
-            )
-            enc_8192 = HEncLayer(
-                chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
-            )
+            # Create encoders for each resolution (dynamic)
+            for res_idx in range(self.num_resolutions):
+                enc = HEncLayer(
+                    chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
+                )
+                self.encoders[res_idx].append(enc)
+            
             if freq:
                 tenc = HEncLayer(
                     chin,
@@ -238,39 +192,24 @@ class HTDemucs_nn(nn.Module):
                 )
                 self.tencoder.append(tenc)
             
-            self.encoder_2048.append(enc_2048)
-            self.encoder_4096.append(enc_4096)
-            self.encoder_8192.append(enc_8192)
             if index == 0:
                 chin = self.audio_channels * len(self.sources)
                 chin_z = chin
                 if self.cac:
                     chin_z *= 2
-            # Create three resolution decoders
-            dec_2048 = HDecLayer(
-                chout_z,
-                chin_z,
-                dconv=dconv_mode & 2,
-                last=index == 0,
-                context=context,
-                **kw_dec
-            )
-            dec_4096 = HDecLayer(
-                chout_z,
-                chin_z,
-                dconv=dconv_mode & 2,
-                last=index == 0,
-                context=context,
-                **kw_dec
-            )
-            dec_8192 = HDecLayer(
-                chout_z,
-                chin_z,
-                dconv=dconv_mode & 2,
-                last=index == 0,
-                context=context,
-                **kw_dec
-            )
+            
+            # Create decoders for each resolution (dynamic)
+            for res_idx in range(self.num_resolutions):
+                dec = HDecLayer(
+                    chout_z,
+                    chin_z,
+                    dconv=dconv_mode & 2,
+                    last=index == 0,
+                    context=context,
+                    **kw_dec
+                )
+                self.decoders[res_idx].insert(0, dec)
+            
             if freq:
                 tdec = HDecLayer(
                     chout,
@@ -281,9 +220,6 @@ class HTDemucs_nn(nn.Module):
                     **kwt
                 )
                 self.tdecoder.insert(0, tdec)
-            self.decoder_2048.insert(0, dec_2048)
-            self.decoder_4096.insert(0, dec_4096)
-            self.decoder_8192.insert(0, dec_8192)
 
             chin = chout
             chin_z = chout_z
@@ -291,21 +227,15 @@ class HTDemucs_nn(nn.Module):
             chout_z = int(growth * chout_z)
 
             if index == 0 and freq_emb:
-                # Create frequency embeddings for three resolutions
-                # After first layer: freqs = (nfft // 2) // stride
-                freq_after_first_layer_2048 = (2048 // 2) // stride
-                freq_after_first_layer_4096 = (4096 // 2) // stride  
-                freq_after_first_layer_8192 = (8192 // 2) // stride
-                
-                self.freq_emb_2048 = ScaledEmbedding(
-                    freq_after_first_layer_2048, chin_z, smooth=emb_smooth, scale=emb_scale
-                )
-                self.freq_emb_4096 = ScaledEmbedding(
-                    freq_after_first_layer_4096, chin_z, smooth=emb_smooth, scale=emb_scale
-                )
-                self.freq_emb_8192 = ScaledEmbedding(
-                    freq_after_first_layer_8192, chin_z, smooth=emb_smooth, scale=emb_scale
-                )
+                # Create frequency embeddings for all resolutions (dynamic)
+                self.freq_embeddings = nn.ModuleList()
+                for nfft in self.nfft_list:
+                    # After first layer: freqs = (nfft // 2) // stride
+                    freq_after_first_layer = (nfft // 2) // stride
+                    emb = ScaledEmbedding(
+                        freq_after_first_layer, chin_z, smooth=emb_smooth, scale=emb_scale
+                    )
+                    self.freq_embeddings.append(emb)
                 self.freq_emb_scale = freq_emb
 
         if rescale:
@@ -367,7 +297,6 @@ class HTDemucs_nn(nn.Module):
 
     def _spec(self, x, nfft=None, hop_length=None):
         hl = hop_length
-        assert hl == nfft // 4
 
         # We re-pad the signal in order to keep the property
         # that the size of the output is exactly the size of the input
@@ -482,36 +411,32 @@ class HTDemucs_nn(nn.Module):
                 if mix.shape[-1] < training_length:
                     length_pre_pad = mix.shape[-1]
                     mix = F.pad(mix, (0, training_length - length_pre_pad))
-        # Multi-resolution STFT
-        z_2048 = self._spec(mix, nfft=2048, hop_length=self.hop_lengths[0])
-        z_4096 = self._spec(mix, nfft=4096, hop_length=self.hop_lengths[1])
-        z_8192 = self._spec(mix, nfft=8192, hop_length=self.hop_lengths[2])
+        # Multi-resolution STFT (dynamic)
+        z_list = []
+        mag_list = []
+        x_list = []
+        mean_list = []
+        std_list = []
+        shapes_list = []
         
-        # Convert to magnitude
-        mag_2048 = self._magnitude(z_2048).to(mix.device)
-        mag_4096 = self._magnitude(z_4096).to(mix.device)
-        mag_8192 = self._magnitude(z_8192).to(mix.device)
-        
-        # Get shapes for each resolution
-        B, C, Fq_2048, T_2048 = mag_2048.shape
-        _, _, Fq_4096, T_4096 = mag_4096.shape
-        _, _, Fq_8192, T_8192 = mag_8192.shape
-
-        # Normalize each resolution separately
-        # 2048 resolution
-        mean_2048 = mag_2048.mean(dim=(1, 2, 3), keepdim=True)
-        std_2048 = mag_2048.std(dim=(1, 2, 3), keepdim=True)
-        x_2048 = (mag_2048 - mean_2048) / (1e-5 + std_2048)
-        
-        # 4096 resolution  
-        mean_4096 = mag_4096.mean(dim=(1, 2, 3), keepdim=True)
-        std_4096 = mag_4096.std(dim=(1, 2, 3), keepdim=True)
-        x_4096 = (mag_4096 - mean_4096) / (1e-5 + std_4096)
-        
-        # 8192 resolution
-        mean_8192 = mag_8192.mean(dim=(1, 2, 3), keepdim=True)
-        std_8192 = mag_8192.std(dim=(1, 2, 3), keepdim=True)
-        x_8192 = (mag_8192 - mean_8192) / (1e-5 + std_8192)
+        for nfft, hop_length in zip(self.nfft_list, self.hop_lengths):
+            z = self._spec(mix, nfft=nfft, hop_length=hop_length)
+            z_list.append(z)
+            
+            mag = self._magnitude(z).to(mix.device)
+            mag_list.append(mag)
+            
+            B, C, Fq, T = mag.shape
+            shapes_list.append((Fq, T))
+            
+            # Normalize
+            mean = mag.mean(dim=(1, 2, 3), keepdim=True)
+            std = mag.std(dim=(1, 2, 3), keepdim=True)
+            x = (mag - mean) / (1e-5 + std)
+            
+            mean_list.append(mean)
+            std_list.append(std)
+            x_list.append(x)
 
         # Prepare the time branch input.
         xt = mix
@@ -519,88 +444,68 @@ class HTDemucs_nn(nn.Module):
         stdt = xt.std(dim=(1, 2), keepdim=True)
         xt = (xt - meant) / (1e-5 + stdt)
 
-        # Multi-resolution skip connections and lengths
-        saved_2048 = []  # skip connections for 2048 resolution
-        saved_4096 = []  # skip connections for 4096 resolution  
-        saved_8192 = []  # skip connections for 8192 resolution
+        # Multi-resolution skip connections and lengths (dynamic)
+        saved_list = [[] for _ in range(self.num_resolutions)]
+        lengths_list = [[] for _ in range(self.num_resolutions)]
         saved_t = []  # skip connections, time branch (shared)
-        
-        lengths_2048 = []  # saved lengths for 2048 resolution
-        lengths_4096 = []  # saved lengths for 4096 resolution
-        lengths_8192 = []  # saved lengths for 8192 resolution
         lengths_t = []  # saved lengths for time branch (shared)
+        
         for idx in range(self.depth):
-            #print(f"Debug - {idx}  {x_2048.shape} {x_4096.shape} {x_8192.shape}, y.shape: {xt.shape}")
             # Save lengths for each resolution
-            lengths_2048.append(x_2048.shape[-1])
-            lengths_4096.append(x_4096.shape[-1])
-            lengths_8192.append(x_8192.shape[-1])
+            for res_idx in range(self.num_resolutions):
+                lengths_list[res_idx].append(x_list[res_idx].shape[-1])
+            
             inject = None
             lengths_t.append(xt.shape[-1])
             tenc = self.tencoder[idx]
             xt = tenc(xt)
             saved_t.append(xt)
-            # Encode three resolutions in parallel
-            x_2048 = self.encoder_2048[idx](x_2048, inject)
-            x_4096 = self.encoder_4096[idx](x_4096, inject)
-            x_8192 = self.encoder_8192[idx](x_8192, inject)
+            
+            # Encode all resolutions in parallel
+            for res_idx in range(self.num_resolutions):
+                x_list[res_idx] = self.encoders[res_idx][idx](x_list[res_idx], inject)
+            # Add frequency embedding after first layer
             if idx == 0 and self.freq_emb_scale is not None:
-                # Add frequency embedding for each resolution
-                # 2048 resolution
-                frs_2048 = torch.arange(x_2048.shape[-2], device=x_2048.device)
-                emb_2048 = self.freq_emb_2048(frs_2048).t()[None, :, :, None].expand_as(x_2048)
-                x_2048 = x_2048 + self.freq_emb_scale * emb_2048
-                
-                # 4096 resolution
-                frs_4096 = torch.arange(x_4096.shape[-2], device=x_4096.device)
-                emb_4096 = self.freq_emb_4096(frs_4096).t()[None, :, :, None].expand_as(x_4096)
-                x_4096 = x_4096 + self.freq_emb_scale * emb_4096
-                
-                # 8192 resolution
-                frs_8192 = torch.arange(x_8192.shape[-2], device=x_8192.device)
-                emb_8192 = self.freq_emb_8192(frs_8192).t()[None, :, :, None].expand_as(x_8192)
-                x_8192 = x_8192 + self.freq_emb_scale * emb_8192
+                for res_idx in range(self.num_resolutions):
+                    frs = torch.arange(x_list[res_idx].shape[-2], device=x_list[res_idx].device)
+                    emb = self.freq_embeddings[res_idx](frs).t()[None, :, :, None].expand_as(x_list[res_idx])
+                    x_list[res_idx] = x_list[res_idx] + self.freq_emb_scale * emb
 
             # Save skip connections for each resolution
-            saved_2048.append(x_2048)
-            saved_4096.append(x_4096)
-            saved_8192.append(x_8192)
+            for res_idx in range(self.num_resolutions):
+                saved_list[res_idx].append(x_list[res_idx])
+            
+        # Apply softmax to raw weights
+        raw_weights = F.softmax(self.fusion_weights, dim=0)
+        
+        # Apply momentum smoothing during training (like optimizer momentum)
+        if self.training:
+            with torch.no_grad():
+                self.weight_ema = self.weight_momentum * self.weight_ema + (1 - self.weight_momentum) * raw_weights.detach()
+            alpha = 0.1  
+            weights = alpha * raw_weights + (1 - alpha) * self.weight_ema.detach()
+        else:
+            weights = raw_weights 
                    
         if self.crosstransformer:
             # Save pre-fusion states for residual connections
-            pre_fusion_2048 = x_2048.clone()
-            pre_fusion_4096 = x_4096.clone()
-            pre_fusion_8192 = x_8192.clone()
+            pre_fusion_list = [x.clone() for x in x_list]
             
-            # Get shapes for each resolution
-            B_2048, C_2048, F_2048, T_2048 = x_2048.shape
-            B_4096, C_4096, F_4096, T_4096 = x_4096.shape
-            B_8192, C_8192, F_8192, T_8192 = x_8192.shape
+            # Adaptive fusion to middle resolution (as target)
+            mid_idx = self.num_resolutions // 2
+            target_shape = x_list[mid_idx].shape  # [B, C, F_mid, T]
             
-            # Use 4096 as target resolution (middle resolution)
-            target_F, target_T = F_4096, T_4096
-            B, C = B_4096, C_4096
+            # Interpolate all resolutions to match target shape
+            x_aligned_list = []
+            for res_idx in range(self.num_resolutions):
+                if res_idx == mid_idx:
+                    x_aligned_list.append(x_list[res_idx])
+                else:
+                    x_aligned = F.interpolate(x_list[res_idx], size=target_shape[2:], mode='bilinear', align_corners=False)
+                    x_aligned_list.append(x_aligned)
             
-            # Interpolate 2048 and 8192 to match 4096's shape
-            x_2048_aligned = F.interpolate(x_2048, size=(target_F, target_T), mode='bilinear', align_corners=False)
-            x_8192_aligned = F.interpolate(x_8192, size=(target_F, target_T), mode='bilinear', align_corners=False)
-            
-            # Now all three have the same shape: [B, C, target_F, target_T]
-            # Stack (same as final fusion): [B, C, 3, target_F, target_T]
-            x_stacked = torch.stack([x_2048_aligned, x_4096, x_8192_aligned], dim=2)
-            
-            # Permute to: [B, C, target_F, 3, target_T]
-            x_stacked = x_stacked.permute(0, 1, 3, 2, 4)
-            
-            # Reshape for convolution: [B, C*target_F, 3, target_T]
-            x_stacked = x_stacked.reshape(B, C * target_F, 3, target_T)
-            
-            # Fuse 3 resolutions into 1: [B, C*target_F, 3, target_T] → [B, C*target_F, 1, target_T]
-            x_fused = self.pre_transformer_fusion(x_stacked)  # [B, C*target_F, 1, target_T]
-            x_fused = x_fused.squeeze(2)  # [B, C*target_F, target_T]
-            
-            # Reshape back: [B, C, target_F, target_T]
-            x = x_fused.reshape(B, C, target_F, target_T)
+            # Weighted fusion
+            x = sum(weights[i] * x_aligned_list[i] for i in range(self.num_resolutions))
             
             if self.bottom_channels:
                 b, c, f, t = x.shape
@@ -617,93 +522,54 @@ class HTDemucs_nn(nn.Module):
                 x = rearrange(x, "b c (f t)-> b c f t", f=f)
                 xt = self.channel_downsampler_t(xt)
             
-            # Split fused feature back to 3 resolutions using transposed convolution
-            # Reshape: [B, C, target_F, target_T] → [B, C*target_F, 1, target_T]
-            B, C, target_F, target_T = x.shape
-            x_reshaped = x.reshape(B, C * target_F, 1, target_T)
-            
-            # Split: [B, C*target_F, 1, target_T] → [B, C*target_F, 3, target_T]
-            x_split = self.post_transformer_split(x_reshaped)  # [B, C*target_F, 3, target_T]
-            
-            # Reshape back: [B, C*target_F, 3, target_T] → [B, C, target_F, 3, target_T]
-            x_split = x_split.reshape(B, C, target_F, 3, target_T)
-            
-            # Permute to: [B, C, 3, target_F, target_T] (inverse of pre-transformer)
-            x_split = x_split.permute(0, 1, 3, 2, 4)
-            
-            # Extract three resolutions: each is [B, C, target_F, target_T]
-            x_2048_split = x_split[:, :, 0, :, :]
-            x_4096_split = x_split[:, :, 1, :, :]
-            x_8192_split = x_split[:, :, 2, :, :]
-            
-            # Interpolate back to original shapes
-            x_2048_split = F.interpolate(x_2048_split, size=(F_2048, T_2048), mode='bilinear', align_corners=False)
-            x_4096_split = F.interpolate(x_4096_split, size=(F_4096, T_4096), mode='bilinear', align_corners=False)
-            x_8192_split = F.interpolate(x_8192_split, size=(F_8192, T_8192), mode='bilinear', align_corners=False)
-            
-            # Add residual connections
-            x_2048 = x_2048_split + pre_fusion_2048
-            x_4096 = x_4096_split + pre_fusion_4096
-            x_8192 = x_8192_split + pre_fusion_8192
+            # Split the fused feature back to all resolutions
+            for res_idx in range(self.num_resolutions):
+                if res_idx == mid_idx:
+                    x_split = x
+                else:
+                    x_split = F.interpolate(x, size=pre_fusion_list[res_idx].shape[2:], mode='bilinear', align_corners=False)
+                
+                # Use fusion weights for residual mixing
+                x_list[res_idx] = weights[res_idx] * x_split + (1 - weights[res_idx]) * pre_fusion_list[res_idx]
 
         for idx in range(self.depth):
-            # Pop skip connections for each resolution
-            skip_2048 = saved_2048.pop(-1)
-            skip_4096 = saved_4096.pop(-1)
-            skip_8192 = saved_8192.pop(-1)
-
-            # Decode each resolution separately
-            x_2048, _ = self.decoder_2048[idx](x_2048, skip_2048, lengths_2048.pop(-1))
-            x_4096, _ = self.decoder_4096[idx](x_4096, skip_4096, lengths_4096.pop(-1))
-            x_8192, _ = self.decoder_8192[idx](x_8192, skip_8192, lengths_8192.pop(-1))
-            # `pre` contains the output just before final transposed convolution,
-            # which is used when the freq. and time branch separate.
+            # Decode all resolutions in parallel
+            for res_idx in range(self.num_resolutions):
+                skip = saved_list[res_idx].pop(-1)
+                target_len = lengths_list[res_idx].pop(-1)
+                x_list[res_idx], _ = self.decoders[res_idx][idx](x_list[res_idx], skip, target_len)
 
             # Time domain decoder (shared across resolutions)
             tdec = self.tdecoder[idx]
             length_t = lengths_t.pop(-1)
             skip = saved_t.pop(-1)
             xt, _ = tdec(xt, skip, length_t)
-            #print(f"Debug - {idx}  {x_2048.shape} {x_4096.shape} {x_8192.shape}, y.shape: {xt.shape}")
-        # Let's make sure we used all stored skip connections.
-        assert len(saved_2048) == 0
-        assert len(saved_4096) == 0
-        assert len(saved_8192) == 0
-        assert len(lengths_2048) == 0
-        assert len(lengths_4096) == 0
-        assert len(lengths_8192) == 0
+            
+        # Verify all skip connections are used
+        for res_idx in range(self.num_resolutions):
+            assert len(saved_list[res_idx]) == 0
+            assert len(lengths_list[res_idx]) == 0
         assert len(lengths_t) == 0
         assert len(saved_t) == 0
 
         S = len(self.sources)
         
         # Process each resolution separately
-        # 2048 resolution
-        x_2048 = x_2048.view(B, S, -1, Fq_2048, T_2048)
-        x_2048 = x_2048 * std_2048[:, None] + mean_2048[:, None]
-        
-        # 4096 resolution  
-        x_4096 = x_4096.view(B, S, -1, Fq_4096, T_4096)
-        x_4096 = x_4096 * std_4096[:, None] + mean_4096[:, None]
-        
-        # 8192 resolution
-        x_8192 = x_8192.view(B, S, -1, Fq_8192, T_8192)
-        x_8192 = x_8192 * std_8192[:, None] + mean_8192[:, None]
+        for res_idx in range(self.num_resolutions):
+            Fq, T = shapes_list[res_idx]
+            x_list[res_idx] = x_list[res_idx].view(B, S, -1, Fq, T)
+            x_list[res_idx] = x_list[res_idx] * std_list[res_idx][:, None] + mean_list[res_idx][:, None]
 
-        # to cpu as mps doesnt support complex numbers
-        # demucs issue #435 ##432
-        # NOTE: in this case z already is on cpu
-        # TODO: remove this when mps supports complex numbers
-        x_is_mps = x_4096.device.type == "mps"
+        # Handle MPS device (doesn't support complex numbers)
+        x_is_mps = x_list[0].device.type == "mps"
         if x_is_mps:
-            x_2048 = x_2048.cpu()
-            x_4096 = x_4096.cpu()
-            x_8192 = x_8192.cpu()
+            x_list = [x.cpu() for x in x_list]
 
         # Apply masking for each resolution
-        zout_2048 = self._mask(z_2048, x_2048)
-        zout_4096 = self._mask(z_4096, x_4096)
-        zout_8192 = self._mask(z_8192, x_8192)
+        zout_list = []
+        for res_idx in range(self.num_resolutions):
+            zout = self._mask(z_list[res_idx], x_list[res_idx])
+            zout_list.append(zout)
         
         # Convert back to time domain for each resolution
         if self.use_train_segment:
@@ -715,15 +581,14 @@ class HTDemucs_nn(nn.Module):
             target_length = length
             
         # iSTFT for each resolution with corresponding hop_length
-        x_2048 = self._ispec(zout_2048, target_length, hop_length=self.hop_lengths[0])
-        x_4096 = self._ispec(zout_4096, target_length, hop_length=self.hop_lengths[1])
-        x_8192 = self._ispec(zout_8192, target_length, hop_length=self.hop_lengths[2])
+        x_time_list = []
+        for res_idx in range(self.num_resolutions):
+            x_time = self._ispec(zout_list[res_idx], target_length, hop_length=self.hop_lengths[res_idx])
+            x_time_list.append(x_time)
 
-        # back to mps device
+        # Back to MPS device
         if x_is_mps:
-            x_2048 = x_2048.to("mps")
-            x_4096 = x_4096.to("mps")
-            x_8192 = x_8192.to("mps")
+            x_time_list = [x.to("mps") for x in x_time_list]
 
         # Time domain branch processing
         if self.use_train_segment:
@@ -735,17 +600,25 @@ class HTDemucs_nn(nn.Module):
             xt = xt.view(B, S, -1, length)
         xt = xt * stdt[:, None] + meant[:, None]
         
-        # Multi-resolution time domain fusion using convolution
-        # Stack the three resolutions
-        x_time_list = [x_2048, x_4096, x_8192]
-        x_stacked = torch.stack(x_time_list, dim=2)  # [B, S, 3, C, T]
-        B, S, num_res, C, T = x_stacked.shape
-        x_stacked = x_stacked.permute(0, 1, 3, 2, 4)  # [B, S, C, 3, T]
-        x_stacked = x_stacked.reshape(B, S * C, num_res, T)  # [B, S*C, 3, T]
+        # Source-specific weighted fusion for final output
+        final_weights = F.softmax(self.final_fusion_weights, dim=1)  # [S, num_res]
         
-        x = self.fusion_conv(x_stacked)  # [B, S*C, 1, T]
-        x = x.squeeze(2)  # [B, S*C, T]
-        x = x.reshape(B, S, C, T)  # [B, S, C, T]
+        if self.training:
+            with torch.no_grad():
+                self.final_weight_ema = self.final_weight_momentum * self.final_weight_ema + (1 - self.final_weight_momentum) * final_weights.detach()
+            alpha = 0.1  
+            weights = alpha * final_weights + (1 - alpha) * self.final_weight_ema.detach()
+        else:
+            weights = final_weights 
+            
+        # Initialize output
+        B, S, C, T = x_time_list[0].shape
+        x = torch.zeros_like(x_time_list[0])
+        
+        # Apply source-specific weights
+        for s in range(S):
+            for r in range(self.num_resolutions):
+                x[:, s] += weights[s, r] * x_time_list[r][:, s]
         
         # Add time domain branch
         x = xt + x

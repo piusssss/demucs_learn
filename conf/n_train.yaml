@@ -31,9 +31,9 @@ dset:
   valid_samples:                              
   backend: null                             
 
-epochs: 2                    # 
-batch_size: 1                 # 
-max_batches: 100
+epochs: 10                    # 
+batch_size: 2                 # 
+max_batches: 400
 
 optim:
   lr: 1e-3
@@ -90,7 +90,7 @@ htdemucs_n:
   channels: 24                                
   channels_time: null
   growth: 2
-  
+  nfft_list: [2048, 4096, 8192]
   # STFT参数
   wiener_iters: 0
   end_iters: 0
@@ -114,7 +114,7 @@ htdemucs_n:
   context_enc: 0
   
   # 归一化
-  norm_starts: 3
+  norm_starts: 4
   norm_groups: 4
   
   # DConv残差分支

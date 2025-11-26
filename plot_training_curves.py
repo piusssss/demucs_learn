@@ -161,8 +161,8 @@ def plot_sdr_curves(experiments, output_file='sdr_curves.pdf'):
 def main():
     # 硬编码实验配置
     experiments = {
-        'HTDemucs Baseline': 'outputs/xps/3fba3fc3',
-        'Your Model': 'outputs/xps/0d31a08f',
+        'HTDemucs Baseline': 'outputs/xps/60ac4b53',
+        'Your Model': 'outputs/xps/e2f418f7',
     }
     
     print(f"📊 绘制实验对比:")

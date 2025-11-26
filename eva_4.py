@@ -292,17 +292,19 @@ def evaluate_all_tracks_4source(test_dir, model_name="htdemucs", repo_path=None,
                 }
                 
                 if compute_traditional_sdr:
-                    source_result.update({
-                        'SDR': sdr[i].tolist(),
-                        'ISR': isr[i].tolist(),
-                        'SIR': sir[i].tolist(),
-                        'SAR': sar[i].tolist()
-                    })
-                    
                     # Calculate statistics
                     sdr_clean = [x for x in sdr[i] if np.isfinite(x)]
                     sdr_clean_mean = np.mean(sdr_clean) if sdr_clean else np.nan
                     sdr_clean_median = np.median(sdr_clean) if sdr_clean else np.nan
+                    
+                    source_result.update({
+                        'SDR': sdr[i].tolist(),
+                        'SDR_mean': float(sdr_clean_mean),
+                        'SDR_median': float(sdr_clean_median),
+                        'ISR': isr[i].tolist(),
+                        'SIR': sir[i].tolist(),
+                        'SAR': sar[i].tolist()
+                    })
                     
                     # Print source result
                     if not np.isnan(sdr_clean_mean):
@@ -402,7 +404,7 @@ def main():
     
     # Model configuration - modify these to use experiment models
     model_name = "htdemucs"  # For pretrained models: "htdemucs", "htdemucs_ft", etc.
-    model_name = "0d31a08f"
+    model_name = "248nn97d170e1"
     repo_path = None
     repo_path = "./release_models"
     #repo_path = "./release_models"  # For experiment models: set to experiment directory path
@@ -471,6 +473,32 @@ def main():
             # Process each track's results
             for track_name, track_scores in results['tracks'].items():
                 json_results['tracks'][track_name] = {}
+                
+                # Calculate track-level SDR for JSON output and printing
+                track_nsdr_scores = [track_scores[source]['NSDR'] for source in source_order]
+                track_avg_nsdr = np.mean(track_nsdr_scores)
+                
+                track_summary = {
+                    'NSDR': float(track_avg_nsdr)
+                }
+                
+                if compute_traditional_sdr:
+                    track_sdr_medians = [track_scores[source]['SDR_median'] for source in source_order 
+                                       if not np.isnan(track_scores[source]['SDR_median'])]
+                    
+                    if track_sdr_medians:
+                        track_avg_sdr = np.mean(track_sdr_medians)
+                        track_summary['SDR_median'] = float(track_avg_sdr)
+                        print(f"  {track_name}: Traditional SDR {track_avg_sdr:.3f} dB, New SDR {track_avg_nsdr:.3f} dB")
+                    else:
+                        print(f"  {track_name}: New SDR {track_avg_nsdr:.3f} dB")
+                else:
+                    print(f"  {track_name}: New SDR {track_avg_nsdr:.3f} dB")
+                
+                # Add track summary to JSON
+                json_results['tracks'][track_name]['track_summary'] = track_summary
+                
+                # Add individual source results
                 for source, scores in track_scores.items():
                     json_results['tracks'][track_name][source] = {
                         k: v if isinstance(v, list) else [v] if not isinstance(v, (int, float)) else v

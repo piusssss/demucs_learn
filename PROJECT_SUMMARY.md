@@ -338,10 +338,80 @@ weight_momentum = 0.9  # 动量平滑
 #### htdemucs_nn 设计思路
 
 **核心改进**：
-- 基于 htdemucs_n 的进一步优化，仅将权重融合分离全部改为卷积
+- 基于 htdemucs_n，引入**源特异性融合权重**
+- 每个源（drums, bass, other, vocals）有独立的分辨率权重
+- 删除卷积融合，改用轻量级的可学习权重
+
+**源特异性融合机制**：
+```python
+# 全局权重（瓶颈处）：所有源共享
+fusion_weights = nn.Parameter(torch.ones(3) / 3)  # [3]
+
+# 源特异性权重（最终融合）：每个源独立
+final_fusion_weights = nn.Parameter(
+    torch.ones(4, 3) / 3  # [4源, 3分辨率]
+)
+
+# 融合方式
+for s in range(sources):
+    for r in range(resolutions):
+        output[:, s] += weights[s, r] * x_time_list[r][:, s]
+```
+
+**设计理念**：
+- 不同源对不同分辨率的需求不同
+- Drums 偏好低分辨率（时间精度）
+- Vocals 偏好中分辨率（平衡时频）
+- 让模型自动学习每个源的最优分辨率组合
+
+**参数增加**：
+- 全局权重：3 个参数
+- 源特异性权重：4×3 = 12 个参数
+- 总计仅增加 12 个参数
 
 **实验结果**：
-- 计算量与参数增加许多，但效果差不多
+- 参数量几乎不变，但提供更灵活的融合策略
+
+#### htdemucs_dnf 设计思路
+
+**核心改进**：
+- 基于 htdemucs_nf（5 分辨率）
+- 将卷积融合替换为 **TimeUNet2D 融合模块**
+- 引入编码器-解码器结构学习分辨率融合
+
+**TimeUNet2D 融合模块**：
+```python
+class TimeUNet2D(nn.Module):
+    # 输入: [B, C, num_res, T]
+    # 编码器: 逐步压缩分辨率维度
+    # 解码器: 恢复到单一输出
+    # 输出: [B, C, 1, T]
+```
+
+**架构特点**：
+- Encoder-Decoder 结构
+- Skip connections 连接编解码器
+- GLU 激活函数
+- 自适应学习分辨率融合模式
+
+**设计理念**：
+- 用神经网络学习复杂的融合策略
+- 而非简单的加权或卷积
+
+**实验结果**：
+- 计算量增加
+- 效果不如简单加权融合（可能信息损失）
+
+#### htdemucs_dn 设计思路
+
+**核心改进**：
+- dnf思路迁移到n
+
+**实验结果**：
+- 计算量增加
+- 效果一般，推测第二个unet太简略。
+
+
 
 ### 实验结果
 

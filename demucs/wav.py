@@ -252,7 +252,7 @@ def get_musdb_wav_datasets(args):
     else:
         kw_cv = {'segment': args.segment, 'shift': args.shift}
     train_set = Wavset(root, metadata_train, args.sources,
-                       segment=args.segment, shift=args.date_shift,
+                       segment=args.segment, shift=args.data_shift,
                        samplerate=args.samplerate, channels=args.channels,
                        normalize=args.normalize)
     valid_set = Wavset(root, metadata_valid, [MIXTURE] + list(args.sources),

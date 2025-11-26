@@ -35,8 +35,11 @@ from .htdemucs_d4 import HTDemucs_d4
 from .htdemucs_c import HTDemucs_c
 from .htdemucs_n import HTDemucs_n
 from .htdemucs_nn import HTDemucs_nn
+from .htdemucs_2nn import HTDemucs_2nn
 from .htdemucs_nc import HTDemucs_nc
 from .htdemucs_nf import HTDemucs_nf
+from .htdemucs_dnf import HTDemucs_dnf
+from .htdemucs_dn import HTDemucs_dn
 from .repitch import RepitchedWrapper
 from .solver import Solver
 from .states import capture_init
@@ -87,8 +90,11 @@ def get_model(args):
         'htdemucs_c': HTDemucs_c,
         'htdemucs_n': HTDemucs_n,
         'htdemucs_nn': HTDemucs_nn,
+        'htdemucs_2nn': HTDemucs_2nn,
         'htdemucs_nc': HTDemucs_nc,
         'htdemucs_nf': HTDemucs_nf,
+        'htdemucs_dnf': HTDemucs_dnf,
+        'htdemucs_dn': HTDemucs_dn,
         'torch_hdemucs': TorchHDemucsWrapper,
     }[args.model]
     kw = OmegaConf.to_container(getattr(args, args.model), resolve=True)

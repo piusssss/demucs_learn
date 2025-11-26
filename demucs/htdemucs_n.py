@@ -46,7 +46,7 @@ class HTDemucs_n(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=3,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
