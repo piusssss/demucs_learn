@@ -1,11 +1,9 @@
 import math
 
-from openunmix.filtering import wiener
 import torch
 from torch import nn
 from torch.nn import functional as F
 from fractions import Fraction
-from einops import rearrange
 
 from .demucs import rescale_module
 from .states import capture_init
@@ -21,14 +19,11 @@ class HTDemucs_nf(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=24,
+        channels=32,
         channels_time=None,
         growth=2,
         # STFT
-        nfft_list=[1024, 2048, 4096, 8192, 16384],  # Multi-resolution STFT window sizes
-        wiener_iters=0,
-        end_iters=0,
-        wiener_residual=False,
+        nfft_list=[2048, 4096, 8192, 16384],  # Multi-resolution STFT window sizes 
         cac=True,
         # Main structure
         depth=4,
@@ -43,13 +38,45 @@ class HTDemucs_nf(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=3,
+        norm_starts=4,
         norm_groups=4,
         # DConv residual branch
-        dconv_mode=0,
+        dconv_mode=1,
         dconv_depth=2,
         dconv_comp=8,
         dconv_init=1e-3,
+        # Transformer
+        t_layers=1,
+        t_emb="sin",
+        t_hidden_scale=4.0,
+        t_heads=8,
+        t_dropout=0.0,
+        t_max_positions=10000,
+        t_norm_in=True,
+        t_norm_in_group=False,
+        t_group_norm=False,
+        t_norm_first=True,
+        t_norm_out=True,
+        t_max_period=10000.0,
+        t_weight_decay=0.0,
+        t_lr=None,
+        t_layer_scale=True,
+        t_gelu=True,
+        t_weight_pos_embed=1.0,
+        t_sin_random_shift=0,
+        t_cape_mean_normalize=True,
+        t_cape_augment=True,
+        t_cape_glob_loc_scale=[5000.0, 1.0, 1.4],
+        t_sparse_self_attn=False,
+        t_sparse_cross_attn=False,
+        t_mask_type="diag",
+        t_mask_random_seed=42,
+        t_sparse_attn_window=500,
+        t_global_window=100,
+        t_sparsity=0.95,
+        t_auto_sparsity=False,
+        # ------ Particuliar parameters
+        t_cross_first=True,
         # Weight init
         rescale=0.1,
         # Metadata
@@ -60,14 +87,9 @@ class HTDemucs_nf(nn.Module):
        
         super().__init__()
         self.cac = cac
-        self.wiener_residual = wiener_residual
         self.audio_channels = audio_channels
         self.sources = sources
-        self.kernel_size = kernel_size
-        self.context = context
-        self.stride = stride
         self.depth = depth
-        self.channels = channels
         self.samplerate = samplerate
         self.segment = segment
         self.use_train_segment = use_train_segment
@@ -75,27 +97,12 @@ class HTDemucs_nf(nn.Module):
         # Multi-resolution window sizes
         self.nfft_list = nfft_list
         self.num_resolutions = len(nfft_list)
-        self.hop_lengths = [nfft // 4 for nfft in nfft_list]
-        self.wiener_iters = wiener_iters
-        self.end_iters = end_iters
-        self.freq_emb = None
-        assert wiener_iters == end_iters
+        self.hop_lengths = [nfft // 2 for nfft in nfft_list]
 
         # Multi-resolution encoders and decoders (dynamic based on nfft_list)
         self.encoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
         self.decoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
         
-        # Multi-resolution fusion convolution
-        num_groups = len(self.sources) * self.audio_channels
-        fusion_conv_wide=129
-        self.fusion_conv = nn.Conv2d(
-            in_channels=num_groups, 
-            out_channels=num_groups,  
-            kernel_size=[self.num_resolutions, fusion_conv_wide],  
-            stride=1,
-            padding=[0,(fusion_conv_wide-1)//2],
-            groups=num_groups//self.audio_channels  
-        )
 
         chin = audio_channels
         chin_z = chin  # number of channels for the freq branch
@@ -175,7 +182,6 @@ class HTDemucs_nf(nn.Module):
 
     def _spec(self, x, nfft=None, hop_length=None):
         hl = hop_length
-        assert hl == nfft // 4
 
         # We re-pad the signal in order to keep the property
         # that the size of the output is exactly the size of the input
@@ -184,21 +190,21 @@ class HTDemucs_nf(nn.Module):
         # which is not supported by torch.stft.
         # Having all convolution operations follow this convention allow to easily
         # align the time and frequency branches later on.
-        assert hl == nfft // 4
+        assert hl == nfft // 2
         le = int(math.ceil(x.shape[-1] / hl))
-        pad = hl // 2 * 3
+        pad = hl
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
 
         z = spectro(x, nfft, hl)[..., :-1, :]
-        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
-        z = z[..., 2: 2 + le]
+        assert z.shape[-1] == le + 3, (z.shape, x.shape, le)
+        z = z[..., 1: 1 + le]
         return z
 
     def _ispec(self, z, length=None, scale=0, hop_length=None):
-        hl = hop_length // (4**scale) 
+        hl = hop_length // (2**scale)
         z = F.pad(z, (0, 0, 0, 1))
-        z = F.pad(z, (2, 2))
-        pad = hl // 2 * 3
+        z = F.pad(z, (1, 2))
+        pad = hl
         le = hl * int(math.ceil(length / hl)) + 2 * pad
         x = ispectro(z, hl, length=le)
         x = x[..., pad: pad + length]
@@ -215,53 +221,12 @@ class HTDemucs_nf(nn.Module):
             m = z.abs()
         return m
 
-    def _mask(self, z, m):
-        # Apply masking given the mixture spectrogram `z` and the estimated mask `m`.
-        # If `cac` is True, `m` is actually a full spectrogram and `z` is ignored.
-        niters = self.wiener_iters
-        if self.cac:
-            B, S, C, Fr, T = m.shape
-            out = m.view(B, S, -1, 2, Fr, T).permute(0, 1, 2, 4, 5, 3)
-            out = torch.view_as_complex(out.contiguous())
-            return out
-        if self.training:
-            niters = self.end_iters
-        if niters < 0:
-            z = z[:, None]
-            return z / (1e-8 + z.abs()) * m
-        else:
-            return self._wiener(m, z, niters)
+    def _mask(self, m):
 
-    def _wiener(self, mag_out, mix_stft, niters):
-        # apply wiener filtering from OpenUnmix.
-        init = mix_stft.dtype
-        wiener_win_len = 300
-        residual = self.wiener_residual
-
-        B, S, C, Fq, T = mag_out.shape
-        mag_out = mag_out.permute(0, 4, 3, 2, 1)
-        mix_stft = torch.view_as_real(mix_stft.permute(0, 3, 2, 1))
-
-        outs = []
-        for sample in range(B):
-            pos = 0
-            out = []
-            for pos in range(0, T, wiener_win_len):
-                frame = slice(pos, pos + wiener_win_len)
-                z_out = wiener(
-                    mag_out[sample, frame],
-                    mix_stft[sample, frame],
-                    niters,
-                    residual=residual,
-                )
-                out.append(z_out.transpose(-1, -2))
-            outs.append(torch.cat(out, dim=0))
-        out = torch.view_as_complex(torch.stack(outs, 0))
-        out = out.permute(0, 4, 3, 2, 1).contiguous()
-        if residual:
-            out = out[:, :-1]
-        assert list(out.shape) == [B, S, C, Fq, T]
-        return out.to(init)
+        B, S, C, Fr, T = m.shape
+        out = m.view(B, S, -1, 2, Fr, T).permute(0, 1, 2, 4, 5, 3)
+        out = torch.view_as_complex(out.contiguous())
+        return out
 
     def valid_length(self, length: int):
         """
@@ -291,8 +256,6 @@ class HTDemucs_nf(nn.Module):
                     length_pre_pad = mix.shape[-1]
                     mix = F.pad(mix, (0, training_length - length_pre_pad))
         # Multi-resolution STFT
-        z_list = []
-        mag_list = []
         x_list = []
         mean_list = []
         std_list = []
@@ -300,10 +263,7 @@ class HTDemucs_nf(nn.Module):
         
         for nfft, hop_length in zip(self.nfft_list, self.hop_lengths):
             z = self._spec(mix, nfft=nfft, hop_length=hop_length)
-            z_list.append(z)
-            
             mag = self._magnitude(z).to(mix.device)
-            mag_list.append(mag)
             
             B, C, Fq, T = mag.shape
             shapes_list.append((Fq, T))
@@ -316,7 +276,7 @@ class HTDemucs_nf(nn.Module):
             mean_list.append(mean)
             std_list.append(std)
             x_list.append(x)
-
+        
         # Multi-resolution skip connections and lengths
         saved_list = [[] for _ in range(self.num_resolutions)]
         lengths_list = [[] for _ in range(self.num_resolutions)]
@@ -350,7 +310,7 @@ class HTDemucs_nf(nn.Module):
                 target_len = lengths_list[res_idx].pop(-1)
                 x_list[res_idx], _ = self.decoders[res_idx][idx](x_list[res_idx], skip, target_len)
         
-        # Verify all skip connections are used
+       # Verify all skip connections are used
         for res_idx in range(self.num_resolutions):
             assert len(saved_list[res_idx]) == 0
             assert len(lengths_list[res_idx]) == 0
@@ -371,7 +331,7 @@ class HTDemucs_nf(nn.Module):
         # Apply masking for each resolution
         zout_list = []
         for res_idx in range(self.num_resolutions):
-            zout = self._mask(z_list[res_idx], x_list[res_idx])
+            zout = self._mask(x_list[res_idx])
             zout_list.append(zout)
         
         # Convert back to time domain for each resolution
@@ -382,7 +342,7 @@ class HTDemucs_nf(nn.Module):
                 target_length = training_length
         else:
             target_length = length
-        
+            
         # iSTFT for each resolution with corresponding hop_length
         x_time_list = []
         for res_idx in range(self.num_resolutions):
@@ -392,19 +352,15 @@ class HTDemucs_nf(nn.Module):
         # Back to MPS device
         if x_is_mps:
             x_time_list = [x.to("mps") for x in x_time_list]
+
+        fixed_assignment = [0, 3, 2, 1]  # drums->2048, bass->16384, other->8192, vocals->4096
         
-        # Multi-resolution fusion using convolution
-        x_stacked = torch.stack(x_time_list, dim=2)  # [B, S, 5, C, T]
-        B, S, num_res, C, T = x_stacked.shape
+        B, S, C, T = x_time_list[0].shape
+        x = torch.zeros(B, S, C, T, device=x_time_list[0].device, dtype=x_time_list[0].dtype)
         
-        x_stacked = x_stacked.permute(0, 1, 3, 2, 4)  # [B, S, C, 5, T]
+        for s in range(S):
+            x[:, s] = x_time_list[fixed_assignment[s]][:, s] 
         
-        x_stacked = x_stacked.reshape(B, S * C, num_res, T)  # [B, S*C, 5, T]
-        
-        x = self.fusion_conv(x_stacked)  # [B, S*C, 1, T]
-        
-        x = x.squeeze(2)  # [B, S*C, T] 
-        x = x.reshape(B, S, C, T)  # [B, S, C, T] 
         if length_pre_pad:
             x = x[..., :length_pre_pad]
         return x

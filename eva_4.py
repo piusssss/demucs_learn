@@ -404,7 +404,7 @@ def main():
     
     # Model configuration - modify these to use experiment models
     model_name = "htdemucs"  # For pretrained models: "htdemucs", "htdemucs_ft", etc.
-    model_name = "248nn97d170e1"
+    model_name = "32_28_50"
     repo_path = None
     repo_path = "./release_models"
     #repo_path = "./release_models"  # For experiment models: set to experiment directory path

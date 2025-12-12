@@ -9,6 +9,8 @@ from demucs.htdemucs_d3 import HTDemucs_d3
 from demucs.htdemucs_d4 import HTDemucs_d4
 from demucs.htdemucs_c import HTDemucs_c
 from demucs.htdemucs import HTDemucs
+from demucs.hdemucs import HDemucs
+from demucs.demucs import Demucs
 from demucs.htdemucs_n import HTDemucs_n
 from demucs.htdemucs_nn import HTDemucs_nn
 from demucs.htdemucs_2nn import HTDemucs_2nn
@@ -18,15 +20,16 @@ from demucs.htdemucs_dnf import HTDemucs_dnf
 from demucs.htdemucs_dn import HTDemucs_dn
 from thop import profile
 
-# Model parameters (these should match your model's __init__ parameters)
+# Model parameters (these should match your model's __init__ parameters) 
 samplerate = 44100
 speed = True  
+cpu = False
 # Instantiate the model with default parameters (let it use its own default segment)
 model = HTDemucs_2nn(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
 segment = model.segment  # Use the model's actual segment parameter
 
 # Move model to GPU if available
-if torch.cuda.is_available():
+if  torch.cuda.is_available() and cpu!=True:
     model = model.cuda()
     print("Using GPU")
 else:
@@ -37,7 +40,7 @@ batch_size = 1
 audio_channels = 2
 length = int(samplerate * segment) # Example length for an 8-second segment
 dummy_input = torch.randn(batch_size, audio_channels, length)
-if torch.cuda.is_available():
+if  torch.cuda.is_available() and cpu!=True:
     dummy_input = dummy_input.cuda()
 macs, params = profile(model, inputs=(dummy_input,))
 
@@ -48,7 +51,7 @@ if speed:
     model.eval()
     test_duration = 180  # 60 seconds test audio
     test_audio = torch.randn(1, 2, int(samplerate * test_duration))
-    if torch.cuda.is_available():
+    if  torch.cuda.is_available() and cpu!=True:
         test_audio = test_audio.cuda()
     
     start_time = time.time()

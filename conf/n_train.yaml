@@ -38,7 +38,7 @@ max_batches: 400
 optim:
   lr: 1e-3
   warmup: 2      # warmup epochs
-  min_lr: 1e-5   # 最小学习率                 #
+  min_lr: 1e-5   # 最小学习率                 
   momentum: 0.9
   beta2: 0.999
   loss: l1
