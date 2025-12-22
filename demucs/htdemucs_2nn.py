@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from fractions import Fraction
 from einops import rearrange
 
-from .transformer_2nn import CrossTransformerEncoder
+from .transformer import CrossTransformerEncoder
 
 from .demucs import rescale_module
 from .states import capture_init
@@ -56,7 +56,7 @@ class HTDemucs_2nn(nn.Module):
         # Before the Transformer
         bottom_channels=0,
         # Transformer
-        t_layers=3,
+        t_layers=5,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -125,6 +125,12 @@ class HTDemucs_2nn(nn.Module):
 
         self.tencoder = nn.ModuleList()
         self.tdecoder = nn.ModuleList()
+        
+        # Multi-resolution fusion weights with momentum smoothing (for bottleneck)
+        self.fusion_weights = nn.Parameter(torch.ones(self.num_resolutions) / self.num_resolutions)
+        # EMA buffer for smooth weight updates (similar to optimizer momentum)
+        self.register_buffer('weight_ema', torch.ones(self.num_resolutions) / self.num_resolutions)
+        self.weight_momentum = 0.9  
         
         # Source-specific fusion weights for final time-domain fusion
         self.final_fusion_weights = nn.Parameter(
@@ -285,7 +291,6 @@ class HTDemucs_2nn(nn.Module):
                 global_window=t_global_window,
                 sparsity=t_sparsity,
                 auto_sparsity=t_auto_sparsity,
-                num_resolutions=self.num_resolutions
             )
         else:
             self.crosstransformer = None
@@ -470,36 +475,63 @@ class HTDemucs_2nn(nn.Module):
             for res_idx in range(self.num_resolutions):
                 saved_list[res_idx].append(x_list[res_idx])
             
+        # Apply softmax to raw weights
+        raw_weights = F.softmax(self.fusion_weights, dim=0)
+        
+        # Apply momentum smoothing during training (like optimizer momentum)
+        if self.training:
+            with torch.no_grad():
+                self.weight_ema = self.weight_momentum * self.weight_ema + (1 - self.weight_momentum) * raw_weights.detach()
+            weights = (1 - self.weight_momentum) * raw_weights + self.weight_momentum * self.weight_ema.detach()
+        else:
+            weights = raw_weights 
+                   
         if self.crosstransformer:
-            # Multi-resolution transformer with resolution embeddings
+            # Save pre-fusion states for residual connections
+            pre_fusion_list = [x.clone() for x in x_list]
+            
+            # Adaptive fusion to middle resolution (as target)
+            mid_idx = self.num_resolutions // 2
+            target_shape = x_list[mid_idx].shape  # [B, C, F_mid, T]
+            
+            # Interpolate all resolutions to match target shape
+            x_aligned_list = []
+            for res_idx in range(self.num_resolutions):
+                if res_idx == mid_idx:
+                    x_aligned_list.append(x_list[res_idx])
+                else:
+                    x_aligned = F.interpolate(x_list[res_idx], size=target_shape[2:], mode='bilinear', align_corners=False)
+                    x_aligned_list.append(x_aligned)
+            
+            #weights = torch.ones(self.num_resolutions, device=weights.device) / self.num_resolutions
+            # Weighted fusion
+            x = sum(weights[i] * x_aligned_list[i] for i in range(self.num_resolutions))
+            
             if self.bottom_channels:
-                # Upsample channels for each resolution
-                x_list_up = []
-                for x in x_list:
-                    b, c, f, t = x.shape
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_upsampler(x)
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    x_list_up.append(x)
-                x_list = x_list_up
+                b, c, f, t = x.shape
+                x = rearrange(x, "b c f t-> b c (f t)")
+                x = self.channel_upsampler(x)
+                x = rearrange(x, "b c (f t)-> b c f t", f=f)
                 xt = self.channel_upsampler_t(xt)
 
-            # Pass list to transformer (handles multi-resolution internally)
-            x_list, xt = self.crosstransformer(x_list, xt)
+            x, xt = self.crosstransformer(x, xt)
 
             if self.bottom_channels:
-                # Downsample channels for each resolution
-                x_list_down = []
-                for x in x_list:
-                    x = rearrange(x, "b c f t-> b c (f t)")
-                    x = self.channel_downsampler(x)
-                    b, c, ft = x.shape
-                    f = x_list[0].shape[2]  # Get original freq dim
-                    x = rearrange(x, "b c (f t)-> b c f t", f=f)
-                    x_list_down.append(x)
-                x_list = x_list_down
+                x = rearrange(x, "b c f t-> b c (f t)")
+                x = self.channel_downsampler(x)
+                x = rearrange(x, "b c (f t)-> b c f t", f=f)
                 xt = self.channel_downsampler_t(xt)
             
+            # Split the fused feature back to all resolutions
+            for res_idx in range(self.num_resolutions):
+                if res_idx == mid_idx:
+                    x_split = x
+                else:
+                    x_split = F.interpolate(x, size=pre_fusion_list[res_idx].shape[2:], mode='bilinear', align_corners=False)
+                
+                # Use fusion weights for residual mixing
+                x_list[res_idx] = weights[res_idx] * x_split + (1 - weights[res_idx]) * pre_fusion_list[res_idx]
+
         for idx in range(self.depth):
             # Decode all resolutions in parallel
             for res_idx in range(self.num_resolutions):
@@ -574,8 +606,7 @@ class HTDemucs_2nn(nn.Module):
         if self.training:
             with torch.no_grad():
                 self.final_weight_ema = self.final_weight_momentum * self.final_weight_ema + (1 - self.final_weight_momentum) * final_weights.detach()
-            alpha = 0.1  
-            weights = alpha * final_weights + (1 - alpha) * self.final_weight_ema.detach()
+            weights = (1 - self.final_weight_momentum) * final_weights + self.final_weight_momentum * self.final_weight_ema.detach()
         else:
             weights = final_weights 
             
@@ -583,6 +614,7 @@ class HTDemucs_2nn(nn.Module):
         B, S, C, T = x_time_list[0].shape
         x = torch.zeros_like(x_time_list[0])
         
+        #weights = torch.ones(len(self.sources), self.num_resolutions, device=weights.device) / self.num_resolutions
         # Apply source-specific weights
         for s in range(S):
             for r in range(self.num_resolutions):

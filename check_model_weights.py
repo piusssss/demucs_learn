@@ -193,7 +193,7 @@ def main():
         return
     
     # 默认模型
-    default_model = "outputs/xps/32_4_100/checkpoint.th"
+    default_model = "outputs/xps/lr_nf20/checkpoint.th"
     
     if Path(default_model).exists():
         check_fusion_weights(default_model)

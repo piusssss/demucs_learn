@@ -339,14 +339,14 @@ def evaluate_all_tracks_4source(test_dir, model_name="htdemucs", repo_path=None,
             median_sdr = np.median(source_sdr_scores[source])
             std_sdr = np.std(source_sdr_scores[source])
             
-            # Official metric: mean of per-track medians
+            # Official SiSEC18 metric: median of per-track medians
             track_medians = [x for x in source_track_medians[source] if np.isfinite(x)]
-            mean_of_medians = np.mean(track_medians) if track_medians else np.nan
-            median_of_medians = np.median(track_medians) if track_medians else np.nan
+            mean_of_medians = np.mean(track_medians) if track_medians else np.nan  # For reference
+            median_of_medians = np.median(track_medians) if track_medians else np.nan  # Official metric
             
             print(f"\n{source.capitalize()}:")
-            print(f"  Mean of per-track medians: {mean_of_medians:.3f} dB (official metric)")
-            print(f"  Median of per-track medians: {median_of_medians:.3f} dB")
+            print(f"  Median of per-track medians: {median_of_medians:.3f} dB (official SiSEC18 metric)")
+            print(f"  Mean of per-track medians: {mean_of_medians:.3f} dB")
             print(f"  All-frames Mean: {mean_sdr:.3f} dB")
             print(f"  All-frames Median: {median_sdr:.3f} dB")
             print(f"  Std: {std_sdr:.3f} dB")
@@ -373,8 +373,8 @@ def evaluate_all_tracks_4source(test_dir, model_name="htdemucs", repo_path=None,
         overall_mean = np.mean(all_means)
         
         print(f"\n=== Overall (across all sources) ===")
-        print(f"Mean of per-track medians: {overall_mean_of_medians:.3f} dB (official metric)")
-        print(f"Median of per-track medians: {overall_median_of_medians:.3f} dB")
+        print(f"Median of per-track medians: {overall_median_of_medians:.3f} dB (official SiSEC18 metric)")
+        print(f"Mean of per-track medians: {overall_mean_of_medians:.3f} dB")
         print(f"All-frames Mean: {overall_mean:.3f} dB")
         print(f"All-frames Median: {overall_median:.3f} dB")
         
@@ -404,7 +404,7 @@ def main():
     
     # Model configuration - modify these to use experiment models
     model_name = "htdemucs"  # For pretrained models: "htdemucs", "htdemucs_ft", etc.
-    model_name = "32_28_50"
+    model_name = "248_50"
     repo_path = None
     repo_path = "./release_models"
     #repo_path = "./release_models"  # For experiment models: set to experiment directory path

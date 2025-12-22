@@ -18,7 +18,7 @@ from dora import distrib as dora_distrib
 
 logger = logging.getLogger(__name__)
 rank = 0
-world_size = 1
+world_size = 1  #torchrun --nproc_per_node=4 -m demucs.train seed=42
 
 
 def init():
