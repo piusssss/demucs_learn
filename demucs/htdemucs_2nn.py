@@ -125,13 +125,13 @@ class HTDemucs_2nn(nn.Module):
 
         self.tencoder = nn.ModuleList()
         self.tdecoder = nn.ModuleList()
-        
+        '''
         # Multi-resolution fusion weights with momentum smoothing (for bottleneck)
         self.fusion_weights = nn.Parameter(torch.ones(self.num_resolutions) / self.num_resolutions)
         # EMA buffer for smooth weight updates (similar to optimizer momentum)
         self.register_buffer('weight_ema', torch.ones(self.num_resolutions) / self.num_resolutions)
         self.weight_momentum = 0.9  
-        
+        '''
         # Source-specific fusion weights for final time-domain fusion
         self.final_fusion_weights = nn.Parameter(
             torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions
@@ -474,7 +474,7 @@ class HTDemucs_2nn(nn.Module):
             # Save skip connections for each resolution
             for res_idx in range(self.num_resolutions):
                 saved_list[res_idx].append(x_list[res_idx])
-            
+        '''    
         # Apply softmax to raw weights
         raw_weights = F.softmax(self.fusion_weights, dim=0)
         
@@ -485,7 +485,7 @@ class HTDemucs_2nn(nn.Module):
             weights = (1 - self.weight_momentum) * raw_weights + self.weight_momentum * self.weight_ema.detach()
         else:
             weights = raw_weights 
-                   
+        '''        
         if self.crosstransformer:
             # Save pre-fusion states for residual connections
             pre_fusion_list = [x.clone() for x in x_list]
@@ -505,7 +505,7 @@ class HTDemucs_2nn(nn.Module):
             
             #weights = torch.ones(self.num_resolutions, device=weights.device) / self.num_resolutions
             # Weighted fusion
-            x = sum(weights[i] * x_aligned_list[i] for i in range(self.num_resolutions))
+            x = sum(1/self.num_resolutions * x_aligned_list[i] for i in range(self.num_resolutions))
             
             if self.bottom_channels:
                 b, c, f, t = x.shape
@@ -530,7 +530,7 @@ class HTDemucs_2nn(nn.Module):
                     x_split = F.interpolate(x, size=pre_fusion_list[res_idx].shape[2:], mode='bilinear', align_corners=False)
                 
                 # Use fusion weights for residual mixing
-                x_list[res_idx] = weights[res_idx] * x_split + (1 - weights[res_idx]) * pre_fusion_list[res_idx]
+                x_list[res_idx] = 1/self.num_resolutions * x_split + (1 - 1/self.num_resolutions) * pre_fusion_list[res_idx]
 
         for idx in range(self.depth):
             # Decode all resolutions in parallel
@@ -600,8 +600,12 @@ class HTDemucs_2nn(nn.Module):
             xt = xt.view(B, S, -1, length)
         xt = xt * stdt[:, None] + meant[:, None]
         
-        # Source-specific weighted fusion for final output
-        final_weights = F.softmax(self.final_fusion_weights, dim=1)  # [S, num_res]
+        # Two-stage normalization: column first, then row (no iteration)
+        final_weights = torch.exp(self.final_fusion_weights)  # [S, num_res], ensure positive
+        # Stage 1: Normalize columns (each resolution/column sums to 1) - dim=0 is sources
+        final_weights = final_weights / final_weights.sum(dim=0, keepdim=True)
+        # Stage 2: Normalize rows (each source/row sums to 1) - dim=1 is resolutions
+        final_weights = final_weights / final_weights.sum(dim=1, keepdim=True)
         
         if self.training:
             with torch.no_grad():

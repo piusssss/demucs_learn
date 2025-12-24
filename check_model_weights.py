@@ -119,7 +119,17 @@ def check_fusion_weights(model_path):
             
             # 最终输出的源特异性融合权重
             final_weights = state_dict['final_fusion_weights']
-            final_norm = F.softmax(final_weights, dim=-1)
+            
+            # 检测模型类型（通过检查模型名称）
+            is_mr_model = False
+            is_2nn_model = False
+            if 'args' in checkpoint:
+                args = checkpoint['args']
+                # 检查模型名称
+                if hasattr(args, 'model'):
+                    model_name = args.model if isinstance(args.model, str) else str(args.model)
+                    is_mr_model = 'mr' in model_name.lower()
+                    is_2nn_model = '2nn' in model_name.lower()
             
             print(f"\n{'='*60}")
             print(f"📊 权重2: 源特异性融合（时域）")
@@ -132,22 +142,71 @@ def check_fusion_weights(model_path):
             else:
                 resolutions = [f'Res_{i+1}' for i in range(final_weights.shape[1])]
             
-            # 简洁显示每个源的权重
+            # 显示原始权重值（logits）
             source_names = ['Drums', 'Bass', 'Other', 'Vocals']
-            print(f"\n各源的权重分布:")
+            print(f"\n原始权重参数（logits，训练学到的值）:")
             for i, source in enumerate(source_names[:final_weights.shape[0]]):
-                weights = final_norm[i]
-                weight_str = " | ".join([f"{res}: {w:.1f}%" for res, w in zip(resolutions, weights * 100)])
+                weights = final_weights[i]
+                weight_str = " | ".join([f"{res}: {w:+.3f}" for res, w in zip(resolutions, weights)])
                 print(f"  {source:8s}: {weight_str}")
             
-            # 计算平均权重
-            final_avg = final_norm.mean(dim=0)
-            avg_str = " | ".join([f"{res}: {w:.1f}%" for res, w in zip(resolutions, final_avg * 100)])
-            print(f"  {'平均':8s}: {avg_str}")
+            # 根据模型类型选择归一化方式
+            if is_mr_model or is_2nn_model:
+                print(f"\n归一化方式: Two-stage (column then row, no iteration)")
+                
+                # 使用两阶段归一化（与模型完全一致）
+                after_exp = torch.exp(final_weights)  # Ensure positive
+                
+                # Stage 1: Normalize columns (each resolution/column sums to 1) - dim=0 is sources
+                after_col_norm = after_exp / after_exp.sum(dim=0, keepdim=True)
+                
+                print(f"\n第一次归一化（列归一化）:")
+                for i, source in enumerate(source_names[:final_weights.shape[0]]):
+                    weights = after_col_norm[i]
+                    weight_str = " | ".join([f"{res}: {w*100:.1f}%" for res, w in zip(resolutions, weights)])
+                    print(f"  {source:8s}: {weight_str}")
+                col_sums = after_col_norm.sum(dim=0)
+                col_sum_str = " | ".join([f"{res}: {s*100:.1f}%" for res, s in zip(resolutions, col_sums)])
+                print(f"  {'列和':8s}: {col_sum_str}")
+                
+                # Stage 2: Normalize rows (each source/row sums to 1) - dim=1 is resolutions
+                final_norm = after_col_norm / after_col_norm.sum(dim=1, keepdim=True)
+                
+                print(f"\n第二次归一化（行归一化，最终权重）:")
+                for i, source in enumerate(source_names[:final_weights.shape[0]]):
+                    weights = final_norm[i]
+                    weight_str = " | ".join([f"{res}: {w*100:.1f}%" for res, w in zip(resolutions, weights)])
+                    print(f"  {source:8s}: {weight_str}")
+                col_sums = final_norm.sum(dim=0)
+                col_sum_str = " | ".join([f"{res}: {s*100:.1f}%" for res, s in zip(resolutions, col_sums)])
+                print(f"  {'列和':8s}: {col_sum_str}")
+                
+                # 这就是模型实际使用的权重
+                two_stage_weights = final_norm.clone()
+                final_norm_display = final_norm
+            else:
+                print(f"\n归一化方式: Softmax (横向)")
+                
+                # 使用标准softmax归一化（其他模型使用）
+                final_norm_display = F.softmax(final_weights, dim=-1)
+                two_stage_weights = None
+            
+            # 生成分辨率标签（如果之前没有生成）
+            if nfft_list is not None and len(nfft_list) == final_weights.shape[1]:
+                resolutions = [f'{nfft}' for nfft in nfft_list]
+            else:
+                resolutions = [f'Res_{i+1}' for i in range(final_weights.shape[1])]
             
             # 对比两组权重
             if 'fusion_weights' in state_dict:
                 bottleneck_norm = F.softmax(bottleneck_weights, dim=0)
+                
+                # 计算最终权重的平均值（用于对比）
+                if is_mr_model or is_2nn_model:
+                    final_avg = final_norm_display.mean(dim=0)
+                else:
+                    final_avg = final_norm_display.mean(dim=0)
+                
                 diff = (bottleneck_norm - final_avg).abs()
                 
                 print(f"\n🔄 两组权重对比:")
@@ -193,7 +252,7 @@ def main():
         return
     
     # 默认模型
-    default_model = "outputs/xps/lr_nf20/checkpoint.th"
+    default_model = "outputs/xps/248_50/checkpoint.th"
     
     if Path(default_model).exists():
         check_fusion_weights(default_model)

@@ -59,6 +59,68 @@ else:
 total_params = sum(p.numel() for p in model.parameters())
 print(f"\nTotal parameters: {total_params/1e6:.2f}M")
 
+# Count parameters by layer
+print(f"\n{'='*60}")
+print(f"Parameters by Layer")
+print(f"{'='*60}\n")
+
+# Encoder parameters (frequency branch)
+encoder_params = []
+for idx, encode in enumerate(model.encoder):
+    params = sum(p.numel() for p in encode.parameters())
+    encoder_params.append(params)
+    print(f"Encoder Layer {idx} (freq): {params/1e6:.2f}M")
+
+# Time encoder parameters
+tencoder_params = []
+for idx, tenc in enumerate(model.tencoder):
+    params = sum(p.numel() for p in tenc.parameters())
+    tencoder_params.append(params)
+    print(f"Time Encoder Layer {idx}: {params/1e6:.2f}M")
+
+# Transformer parameters
+if model.crosstransformer:
+    transformer_params = sum(p.numel() for p in model.crosstransformer.parameters())
+    print(f"\nTransformer ({t_layers} layers): {transformer_params/1e6:.2f}M")
+else:
+    transformer_params = 0
+    print(f"\nTransformer: 0.00M (disabled)")
+
+# Decoder parameters (frequency branch)
+decoder_params = []
+for idx, decode in enumerate(model.decoder):
+    params = sum(p.numel() for p in decode.parameters())
+    decoder_params.append(params)
+    print(f"Decoder Layer {idx} (freq): {params/1e6:.2f}M")
+
+# Time decoder parameters
+tdecoder_params = []
+for idx, tdec in enumerate(model.tdecoder):
+    params = sum(p.numel() for p in tdec.parameters())
+    tdecoder_params.append(params)
+    print(f"Time Decoder Layer {idx}: {params/1e6:.2f}M")
+
+# Frequency embedding
+if model.freq_emb is not None:
+    freq_emb_params = sum(p.numel() for p in model.freq_emb.parameters())
+    print(f"\nFrequency Embedding: {freq_emb_params/1e6:.2f}M")
+else:
+    freq_emb_params = 0
+    print(f"\nFrequency Embedding: 0.00M (disabled)")
+
+# Summary
+print(f"\n{'='*60}")
+print(f"Parameter Summary")
+print(f"{'='*60}\n")
+print(f"Encoder (freq):      {sum(encoder_params)/1e6:.2f}M ({sum(encoder_params)/total_params*100:.1f}%)")
+print(f"Encoder (time):      {sum(tencoder_params)/1e6:.2f}M ({sum(tencoder_params)/total_params*100:.1f}%)")
+print(f"Transformer:         {transformer_params/1e6:.2f}M ({transformer_params/total_params*100:.1f}%)")
+print(f"Decoder (freq):      {sum(decoder_params)/1e6:.2f}M ({sum(decoder_params)/total_params*100:.1f}%)")
+print(f"Decoder (time):      {sum(tdecoder_params)/1e6:.2f}M ({sum(tdecoder_params)/total_params*100:.1f}%)")
+print(f"Freq Embedding:      {freq_emb_params/1e6:.2f}M ({freq_emb_params/total_params*100:.1f}%)")
+print(f"{'-'*60}")
+print(f"TOTAL:               {total_params/1e6:.2f}M (100.0%)")
+
 # Create test audio for detailed profiling
 test_duration_detail = 10  # 10 seconds for detailed profiling (avoid OOM)
 test_audio_detail = torch.randn(1, 2, int(samplerate * test_duration_detail))

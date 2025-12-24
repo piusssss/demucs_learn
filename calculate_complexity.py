@@ -28,7 +28,7 @@ samplerate = 44100
 speed = True
 cpu = False
 # Instantiate the model with default parameters (let it use its own default segment)
-model = HTDemucs_mr(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
+model = HTDemucs_2nn(sources=['vocals', 'drums', 'bass', 'other'], samplerate=samplerate)
 segment = model.segment  # Use the model's actual segment parameter
 
 # Move model to GPU if available

@@ -4,11 +4,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from fractions import Fraction
-from .transformer_mr import CrossTransformerEncoder
+from .transformer import CrossTransformerEncoder
 from .demucs3 import rescale_module
 from .states import capture_init
 from .spec import spectro, ispectro
 from .hdemucs3 import pad1d, ScaledEmbedding, HEncLayer, HDecLayer
+# Import 3D layers for time branch
+from .hdemucs import HEncLayer as HEncLayer3D, HDecLayer as HDecLayer3D
 
 
 def create_sliding_windows(x_list, window_size):
@@ -156,24 +158,26 @@ class HTDemucs_mr(nn.Module):
         sources,
         # Channels
         audio_channels=2,
-        channels=32,
+        channels=48,
         channels_time=None,
         growth=2,
         # STFT
         nfft_list=[2048,4096,8192],  # Multi-resolution STFT window sizes 
         cac=True,
         # Main structure
-        depth=5,
-        independent=1,
+        depth=4,
+        independent=2,
         rewrite=True,
         # Frequency branch
-        freq_emb=0.2,
+        freq_emb=0.5,
         emb_scale=10,
         emb_smooth=True,
         # Convolutions
         share=False,
-        kernel_size=8,
-        stride=4,
+        kernel_size=16,
+        stride=8,
+        t_kernel_size=8,
+        t_stride=4,
         resolutions_merge_size=2,
         context=1,
         context_enc=0,
@@ -217,6 +221,7 @@ class HTDemucs_mr(nn.Module):
         t_auto_sparsity=False,
         # Weight init
         rescale=0.1,
+        t_cross_first=False,
         # Metadata
         samplerate=44100,
         segment=10,
@@ -243,6 +248,9 @@ class HTDemucs_mr(nn.Module):
 
         self.encoder = nn.ModuleList()
         self.decoder = nn.ModuleList()
+        self.tencoder = nn.ModuleList()  # Time branch encoder
+        self.tdecoder = nn.ModuleList()  # Time branch decoder
+        
         if not self.share:
             # Independent encoders/decoders for each window at each layer
             # Calculate max number of windows at each layer
@@ -261,7 +269,7 @@ class HTDemucs_mr(nn.Module):
             torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions
         )
         self.register_buffer('final_weight_ema', torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions)
-        self.final_weight_momentum = 0.9  
+        self.final_weight_momentum = 0.8  
         
         chin = audio_channels
         chin_z = chin  # number of channels for the freq branch
@@ -274,6 +282,7 @@ class HTDemucs_mr(nn.Module):
             norm = index >= norm_starts
             merge = resolutions_merge_size if index > independent-1 else 1
             context = 0 if index > independent-1 else context
+            #growth = 1 if index > independent-2 else growth
             stri = 2**(merge-1) if index > independent-1 else stride
             ker = 2**(merge-1) if index > independent-1 else kernel_size
             freq = True
@@ -294,6 +303,11 @@ class HTDemucs_mr(nn.Module):
                     "gelu": True,
                 },
             }
+            kwt = dict(kw)
+            kwt["freq"] = 0
+            kwt["kernel_size"] = t_kernel_size
+            kwt["stride"] = t_stride
+            kwt["pad"] = True
             kw_dec = dict(kw)
 
             if not self.share:
@@ -323,6 +337,16 @@ class HTDemucs_mr(nn.Module):
                 )
                 self.encoder.append(enc)
             
+            # Time branch encoder
+            if freq:
+                tenc = HEncLayer3D(
+                    chin,
+                    chout,
+                    dconv=dconv_mode & 1,
+                    context=context_enc,
+                    **kwt
+                )
+                self.tencoder.append(tenc)
             
             if index == 0:
                 chin = self.audio_channels * len(self.sources)
@@ -359,6 +383,17 @@ class HTDemucs_mr(nn.Module):
                 )
                 self.decoder.insert(0, dec)
 
+            # Time branch decoder
+            if freq:
+                tdec = HDecLayer3D(
+                    chout,
+                    chin,
+                    dconv=dconv_mode & 2,
+                    last=index == 0,
+                    context=context,
+                    **kwt
+                )
+                self.tdecoder.insert(0, tdec)
             chin = chout
             chin_z = chout_z
             chout = int(growth * chout)
@@ -386,6 +421,7 @@ class HTDemucs_mr(nn.Module):
                 hidden_scale=t_hidden_scale,
                 num_heads=t_heads,
                 num_layers=t_layers,
+                cross_first=t_cross_first,
                 dropout=t_dropout,
                 max_positions=t_max_positions,
                 norm_in=t_norm_in,
@@ -513,6 +549,12 @@ class HTDemucs_mr(nn.Module):
             mean_list.append(mean)
             std_list.append(std)
             x_list.append(x)
+        
+        # Prepare the time branch input
+        xt = mix
+        meant = xt.mean(dim=(1, 2), keepdim=True)
+        stdt = xt.std(dim=(1, 2), keepdim=True)
+        xt = (xt - meant) / (1e-5 + stdt)
             
         if not self.independent:
             aligned_windows = create_sliding_windows(x_list, self.resolutions_merge_size)
@@ -524,6 +566,8 @@ class HTDemucs_mr(nn.Module):
         saved = []
         saved_shapes = []
         lengths = []
+        saved_t = []  # Time branch skip connections
+        lengths_t = []  # Time branch lengths
         saved_shapes.append(out_shapes)
         
         for idx, encode in enumerate(self.encoder):
@@ -532,12 +576,19 @@ class HTDemucs_mr(nn.Module):
             # for i, w in enumerate(aligned_windows):
             #     print(f"[ENC-{idx}] Input window {i}: {w.shape}")
             
+            # Time branch encoder
+            inject = None
+            if idx < len(self.tencoder):
+                lengths_t.append(xt.shape[-1])
+                tenc = self.tencoder[idx]
+                xt = tenc(xt)
+                saved_t.append(xt)
+            
             # Process each window separately
             encoded_windows = []
             encoded_shapes = []
             for window_idx, x in enumerate(aligned_windows):
                 lengths.append(x.shape[-1])
-                inject = None
                 
                 # Use independent or shared encoder
                 if self.share:
@@ -574,8 +625,8 @@ class HTDemucs_mr(nn.Module):
             # Squeeze R dimension for transformer
             aligned_windows[0] = aligned_windows[0].squeeze(2)  # [B, C, F, T]
             
-            # Single input self-attention
-            aligned_windows[0] = self.crosstransformer(aligned_windows[0])  # [B, C, F, T]
+            # Cross-attention with time branch
+            aligned_windows[0], xt = self.crosstransformer(aligned_windows[0], xt)  # [B, C, F, T]
             
             # Restore R dimension
             aligned_windows[0] = aligned_windows[0].unsqueeze(2)  # [B, C, R=1, F, T]
@@ -607,6 +658,13 @@ class HTDemucs_mr(nn.Module):
                 # print(f"[DEC-{idx}] Window {window_idx} after decode: {x_decoded.shape}")
                 decoded_windows.append(x_decoded)
             
+            # Time branch decoder
+            if idx < len(self.tdecoder):
+                tdec = self.tdecoder[idx]
+                length_t = lengths_t.pop(-1)
+                skip_t = saved_t.pop(-1)
+                xt, _ = tdec(xt, skip_t, length_t)
+            
             if idx < len(self.decoder) - self.independent:
                 aligned_windows = split_windows(decoded_windows, self.resolutions_merge_size, layer_shapes)
             else:
@@ -619,6 +677,8 @@ class HTDemucs_mr(nn.Module):
 
         assert len(saved) == 0
         assert len(lengths) == 0
+        assert len(saved_t) == 0
+        assert len(lengths_t) == 0
         
         S = len(self.sources)
         
@@ -664,8 +724,23 @@ class HTDemucs_mr(nn.Module):
         if x_is_mps:
             x_time_list = [x.to("mps") for x in x_time_list]
 
+        # Time domain branch processing
+        if self.use_train_segment:
+            if self.training:
+                xt = xt.view(B, S, -1, length)
+            else:
+                xt = xt.view(B, S, -1, training_length)
+        else:
+            xt = xt.view(B, S, -1, length)
+        xt = xt * stdt[:, None] + meant[:, None]
+
         # Source-specific weighted fusion for final output
-        final_weights = F.softmax(self.final_fusion_weights, dim=1)  # [S, num_res]
+        # Two-stage normalization: column first, then row (no iteration)
+        final_weights = torch.exp(self.final_fusion_weights)  # [S, num_res], ensure positive
+        # Stage 1: Normalize columns (each resolution/column sums to 1) - dim=0 is sources
+        final_weights = final_weights / final_weights.sum(dim=0, keepdim=True)
+        # Stage 2: Normalize rows (each source/row sums to 1) - dim=1 is resolutions
+        final_weights = final_weights / final_weights.sum(dim=1, keepdim=True)
         
         if self.training:
             with torch.no_grad():
@@ -683,6 +758,9 @@ class HTDemucs_mr(nn.Module):
         for s in range(S):
             for r in range(self.num_resolutions):
                 x[:, s] += weights[s, r] * x_time_list[r][:, s]
+        
+        # Add time domain branch
+        x = xt + x
         
         if length_pre_pad:
             # print(f"[DEBUG] Cropping to length_pre_pad={length_pre_pad}")

@@ -1,0 +1,455 @@
+{
+  "model": "e248_100",
+  "track": "Carlos Gonzalez - A Place For Us",
+  "timestamp": "2025-12-25T00:20:03.061359",
+  "sources": {
+    "drums": {
+      "sample_rate": 44100,
+      "duration_seconds": 250.21875283446713,
+      "energy_distribution": {
+        "Sub-bass (20-60 Hz)": {
+          "real_energy": 1970425.75,
+          "model_energy": 1555381.5,
+          "ratio": 0.7893631458282471
+        },
+        "Bass (60-250 Hz)": {
+          "real_energy": 26826260.0,
+          "model_energy": 20168062.0,
+          "ratio": 0.7518029808998108
+        },
+        "Low-mid (250-500 Hz)": {
+          "real_energy": 2854038.25,
+          "model_energy": 1543756.5,
+          "ratio": 0.5409025549888611
+        },
+        "Mid (500-2000 Hz)": {
+          "real_energy": 1828081.75,
+          "model_energy": 778083.75,
+          "ratio": 0.42562854290008545
+        },
+        "High (2000-8000 Hz)": {
+          "real_energy": 1104981.625,
+          "model_energy": 547434.875,
+          "ratio": 0.49542441964149475
+        },
+        "Total": {
+          "real_energy": 35013584.0,
+          "model_energy": 25400606.0,
+          "ratio": 0.7254500389099121
+        }
+      },
+      "spectral_similarity": {
+        "overall_correlation": 0.9108253758191641,
+        "cosine_similarity": 0.91244622396817,
+        "band_correlations": {
+          "Sub-bass (20-60 Hz)": 0.8373073943040248,
+          "Bass (60-250 Hz)": 0.9276540164141873,
+          "Low-mid (250-500 Hz)": 0.8371110694678361,
+          "Mid (500-2000 Hz)": 0.7628337337567249,
+          "High (2000-8000 Hz)": 0.8021928054431428
+        }
+      },
+      "error_energy": {
+        "Sub-bass (20-60 Hz)": {
+          "error_energy": 729828.8125,
+          "pseudo_sdr": 4.313390696994574,
+          "error_ratio": 0.3703914306337095
+        },
+        "Bass (60-250 Hz)": {
+          "error_energy": 5053450.5,
+          "pseudo_sdr": 7.249721134340096,
+          "error_ratio": 0.18837700447248332
+        },
+        "Low-mid (250-500 Hz)": {
+          "error_energy": 1342422.25,
+          "pseudo_sdr": 3.2757064749415097,
+          "error_ratio": 0.4703588853443012
+        },
+        "Mid (500-2000 Hz)": {
+          "error_energy": 1117074.0,
+          "pseudo_sdr": 2.139136693638829,
+          "error_ratio": 0.6110634822540075
+        },
+        "High (2000-8000 Hz)": {
+          "error_energy": 541902.4375,
+          "pseudo_sdr": 3.09433951604164,
+          "error_ratio": 0.49041760083567
+        },
+        "Total": {
+          "error_energy": 9338968.0,
+          "pseudo_sdr": 5.739376802484262,
+          "error_ratio": 0.266724137694673
+        }
+      },
+      "silence_leakage": {
+        "silence_threshold": 4.753447137773037e-05,
+        "silence_frames_count": 2155,
+        "total_frames": 21553,
+        "silence_frames_percentage": 9.998608082401521,
+        "silence_leakage_rms": 0.0033714724704623222,
+        "active_output_rms": 0.026611678302288055,
+        "leakage_ratio": 0.12669146060943604,
+        "silence_energy_ratio": 0.0007683566072955728
+      },
+      "temporal_alignment": {
+        "real_onsets_count": 955,
+        "model_onsets_count": 791,
+        "matched_onsets": 776,
+        "onset_precision": 0.9810366624525917,
+        "onset_recall": 0.812565445026178,
+        "onset_f1": 0.8888888888888888,
+        "tolerance_ms": 50.0
+      },
+      "spectral_divergence": {
+        "kl_divergence": 0.05998963117599487,
+        "js_divergence": 0.015957633964717388
+      },
+      "dynamic_range": {
+        "real_dynamic_range_db": 93.96163294119148,
+        "model_dynamic_range_db": 40.695228559035215,
+        "real_peak": 0.603729248046875,
+        "model_peak": 0.553863525390625,
+        "real_rms": 0.045421380549669266,
+        "model_rms": 0.038509927690029144,
+        "real_crest_factor_db": 22.471637698625322,
+        "model_crest_factor_db": 23.156601228094665
+      }
+    },
+    "bass": {
+      "sample_rate": 44100,
+      "duration_seconds": 250.21875283446713,
+      "energy_distribution": {
+        "Sub-bass (20-60 Hz)": {
+          "real_energy": 1754808.75,
+          "model_energy": 1616876.125,
+          "ratio": 0.92139732837677
+        },
+        "Bass (60-250 Hz)": {
+          "real_energy": 6847736.0,
+          "model_energy": 4560229.0,
+          "ratio": 0.6659469604492188
+        },
+        "Low-mid (250-500 Hz)": {
+          "real_energy": 401359.78125,
+          "model_energy": 57692.609375,
+          "ratio": 0.1437428742647171
+        },
+        "Mid (500-2000 Hz)": {
+          "real_energy": 156564.8125,
+          "model_energy": 12658.1240234375,
+          "ratio": 0.08084909617900848
+        },
+        "High (2000-8000 Hz)": {
+          "real_energy": 55914.71484375,
+          "model_energy": 2683.619140625,
+          "ratio": 0.047994863241910934
+        },
+        "Total": {
+          "real_energy": 9225035.0,
+          "model_energy": 6693219.0,
+          "ratio": 0.7255494594573975
+        }
+      },
+      "spectral_similarity": {
+        "overall_correlation": 0.7729540900607894,
+        "cosine_similarity": 0.7742570652557903,
+        "band_correlations": {
+          "Sub-bass (20-60 Hz)": 0.8342421218305087,
+          "Bass (60-250 Hz)": 0.7497159089684671,
+          "Low-mid (250-500 Hz)": 0.4646238039155867,
+          "Mid (500-2000 Hz)": 0.2553733863008844,
+          "High (2000-8000 Hz)": 0.20349280902500558
+        }
+      },
+      "error_energy": {
+        "Sub-bass (20-60 Hz)": {
+          "error_energy": 685806.5625,
+          "pseudo_sdr": 4.080281546866974,
+          "error_ratio": 0.39081555896048503
+        },
+        "Bass (60-250 Hz)": {
+          "error_energy": 3712118.75,
+          "pseudo_sdr": 2.659251479151548,
+          "error_ratio": 0.542094314091548
+        },
+        "Low-mid (250-500 Hz)": {
+          "error_energy": 386846.75,
+          "pseudo_sdr": 0.15994898731387114,
+          "error_ratio": 0.9638403449274351
+        },
+        "Mid (500-2000 Hz)": {
+          "error_energy": 168303.125,
+          "pseudo_sdr": -0.31398017666509037,
+          "error_ratio": 1.0749741420984993
+        },
+        "High (2000-8000 Hz)": {
+          "error_energy": 58033.64453125,
+          "pseudo_sdr": -0.16153730845323203,
+          "error_ratio": 1.0378957434267724
+        },
+        "Total": {
+          "error_energy": 5453069.0,
+          "pseudo_sdr": 2.2832702952343937,
+          "error_ratio": 0.5911163480680561
+        }
+      },
+      "silence_leakage": {
+        "silence_threshold": 8.792442713456694e-06,
+        "silence_frames_count": 2081,
+        "total_frames": 21553,
+        "silence_frames_percentage": 9.65526840811024,
+        "silence_leakage_rms": 0.0038012941367924213,
+        "active_output_rms": 0.01427331380546093,
+        "leakage_ratio": 0.2663217782974243,
+        "silence_energy_ratio": 0.005255191121250391
+      },
+      "temporal_alignment": {
+        "real_onsets_count": 418,
+        "model_onsets_count": 930,
+        "matched_onsets": 389,
+        "onset_precision": 0.4182795698924731,
+        "onset_recall": 0.930622009569378,
+        "onset_f1": 0.5771513353115727,
+        "tolerance_ms": 50.0
+      },
+      "spectral_divergence": {
+        "kl_divergence": 0.17848144471645355,
+        "js_divergence": 0.05082004889845848
+      },
+      "dynamic_range": {
+        "real_dynamic_range_db": 85.4094861263013,
+        "model_dynamic_range_db": 33.93951721470857,
+        "real_peak": 0.344573974609375,
+        "model_peak": 0.2444305419921875,
+        "real_rms": 0.02332581952214241,
+        "model_rms": 0.01954066939651966,
+        "real_crest_factor_db": 23.388911190535858,
+        "model_crest_factor_db": 21.944320629120924
+      }
+    },
+    "other": {
+      "sample_rate": 44100,
+      "duration_seconds": 250.21875283446713,
+      "energy_distribution": {
+        "Sub-bass (20-60 Hz)": {
+          "real_energy": 314441.90625,
+          "model_energy": 137945.125,
+          "ratio": 0.43869829177856445
+        },
+        "Bass (60-250 Hz)": {
+          "real_energy": 5651272.0,
+          "model_energy": 4878220.5,
+          "ratio": 0.8632075190544128
+        },
+        "Low-mid (250-500 Hz)": {
+          "real_energy": 19078888.0,
+          "model_energy": 17470192.0,
+          "ratio": 0.9156818985939026
+        },
+        "Mid (500-2000 Hz)": {
+          "real_energy": 18601504.0,
+          "model_energy": 17779894.0,
+          "ratio": 0.955830991268158
+        },
+        "High (2000-8000 Hz)": {
+          "real_energy": 5154389.0,
+          "model_energy": 4137050.0,
+          "ratio": 0.8026266694068909
+        },
+        "Total": {
+          "real_energy": 49911348.0,
+          "model_energy": 44897820.0,
+          "ratio": 0.8995513319969177
+        }
+      },
+      "spectral_similarity": {
+        "overall_correlation": 0.9160063854231405,
+        "cosine_similarity": 0.9205320901888474,
+        "band_correlations": {
+          "Sub-bass (20-60 Hz)": 0.7716095692813852,
+          "Bass (60-250 Hz)": 0.7838339288597587,
+          "Low-mid (250-500 Hz)": 0.903295666272441,
+          "Mid (500-2000 Hz)": 0.8728427319074448,
+          "High (2000-8000 Hz)": 0.9478117827790621
+        }
+      },
+      "error_energy": {
+        "Sub-bass (20-60 Hz)": {
+          "error_energy": 127518.4375,
+          "pseudo_sdr": 3.9196743782942574,
+          "error_ratio": 0.4055389404700251
+        },
+        "Bass (60-250 Hz)": {
+          "error_energy": 2791999.75,
+          "pseudo_sdr": 3.0623083565945235,
+          "error_ratio": 0.4940480214011996
+        },
+        "Low-mid (250-500 Hz)": {
+          "error_energy": 4128276.25,
+          "pseudo_sdr": 6.647843074679311,
+          "error_ratio": 0.21637929055404068
+        },
+        "Mid (500-2000 Hz)": {
+          "error_energy": 6275026.0,
+          "pseudo_sdr": 4.719325303268825,
+          "error_ratio": 0.3373397118856626
+        },
+        "High (2000-8000 Hz)": {
+          "error_energy": 761852.6875,
+          "pseudo_sdr": 8.303061876122548,
+          "error_ratio": 0.1478065950202827
+        },
+        "Total": {
+          "error_energy": 14451550.0,
+          "pseudo_sdr": 5.382848695849306,
+          "error_ratio": 0.28954437375644515
+        }
+      },
+      "silence_leakage": {
+        "silence_threshold": 0.004967999085783962,
+        "silence_frames_count": 2156,
+        "total_frames": 21553,
+        "silence_frames_percentage": 10.003247807729782,
+        "silence_leakage_rms": 0.003143471898511052,
+        "active_output_rms": 0.04874275252223015,
+        "leakage_ratio": 0.06449106335639954,
+        "silence_energy_ratio": 0.0003875071997754276
+      },
+      "temporal_alignment": {
+        "real_onsets_count": 535,
+        "model_onsets_count": 818,
+        "matched_onsets": 432,
+        "onset_precision": 0.5281173594132029,
+        "onset_recall": 0.8074766355140187,
+        "onset_f1": 0.6385809312638581,
+        "tolerance_ms": 50.0
+      },
+      "spectral_divergence": {
+        "kl_divergence": 0.005712477490305901,
+        "js_divergence": 0.0014483398408629
+      },
+      "dynamic_range": {
+        "real_dynamic_range_db": 75.70982723527078,
+        "model_dynamic_range_db": 37.8089457473955,
+        "real_peak": 0.39666748046875,
+        "model_peak": 0.365142822265625,
+        "real_rms": 0.05396392568945885,
+        "model_rms": 0.0513276532292366,
+        "real_crest_factor_db": 17.326461225838017,
+        "model_crest_factor_db": 17.042227179376088
+      }
+    },
+    "vocals": {
+      "sample_rate": 44100,
+      "duration_seconds": 250.21875283446713,
+      "energy_distribution": {
+        "Sub-bass (20-60 Hz)": {
+          "real_energy": 1019.375732421875,
+          "model_energy": 117057.9375,
+          "ratio": 114.83296203613281
+        },
+        "Bass (60-250 Hz)": {
+          "real_energy": 9318281.0,
+          "model_energy": 6641531.0,
+          "ratio": 0.7127420902252197
+        },
+        "Low-mid (250-500 Hz)": {
+          "real_energy": 25914856.0,
+          "model_energy": 20807104.0,
+          "ratio": 0.8029025793075562
+        },
+        "Mid (500-2000 Hz)": {
+          "real_energy": 28754406.0,
+          "model_energy": 19980588.0,
+          "ratio": 0.6948704719543457
+        },
+        "High (2000-8000 Hz)": {
+          "real_energy": 1437434.75,
+          "model_energy": 1048104.1875,
+          "ratio": 0.7291490435600281
+        },
+        "Total": {
+          "real_energy": 65990844.0,
+          "model_energy": 49575052.0,
+          "ratio": 0.7512413859367371
+        }
+      },
+      "spectral_similarity": {
+        "overall_correlation": 0.9187760506661447,
+        "cosine_similarity": 0.920077941465089,
+        "band_correlations": {
+          "Sub-bass (20-60 Hz)": 0.17774613728419858,
+          "Bass (60-250 Hz)": 0.8837047940178263,
+          "Low-mid (250-500 Hz)": 0.93857867199946,
+          "Mid (500-2000 Hz)": 0.9097663809046228,
+          "High (2000-8000 Hz)": 0.8722191089617617
+        }
+      },
+      "error_energy": {
+        "Sub-bass (20-60 Hz)": {
+          "error_energy": 117691.96875,
+          "pseudo_sdr": -20.62412537358208,
+          "error_ratio": 115.45494463594008
+        },
+        "Bass (60-250 Hz)": {
+          "error_energy": 2718250.0,
+          "pseudo_sdr": 5.350464060931665,
+          "error_ratio": 0.2917115291972843
+        },
+        "Low-mid (250-500 Hz)": {
+          "error_energy": 3986589.5,
+          "pseudo_sdr": 8.129472813901714,
+          "error_ratio": 0.15383413668206375
+        },
+        "Mid (500-2000 Hz)": {
+          "error_energy": 6440017.0,
+          "pseudo_sdr": 6.498173867118387,
+          "error_ratio": 0.22396626798689565
+        },
+        "High (2000-8000 Hz)": {
+          "error_energy": 482840.15625,
+          "pseudo_sdr": 4.737847579302141,
+          "error_ratio": 0.33590405147085806
+        },
+        "Total": {
+          "error_energy": 14246101.0,
+          "pseudo_sdr": 6.657876638540898,
+          "error_ratio": 0.21587996359010048
+        }
+      },
+      "silence_leakage": {
+        "silence_threshold": 7.013332797214388e-05,
+        "silence_frames_count": 2156,
+        "total_frames": 21553,
+        "silence_frames_percentage": 10.003247807729782,
+        "silence_leakage_rms": 0.002778759691864252,
+        "active_output_rms": 0.04193185269832611,
+        "leakage_ratio": 0.06626846641302109,
+        "silence_energy_ratio": 0.00027863081777468324
+      },
+      "temporal_alignment": {
+        "real_onsets_count": 371,
+        "model_onsets_count": 480,
+        "matched_onsets": 285,
+        "onset_precision": 0.59375,
+        "onset_recall": 0.7681940700808625,
+        "onset_f1": 0.6698002350176263,
+        "tolerance_ms": 50.0
+      },
+      "spectral_divergence": {
+        "kl_divergence": 0.038977839052677155,
+        "js_divergence": 0.012376585509628057
+      },
+      "dynamic_range": {
+        "real_dynamic_range_db": 76.8143154572799,
+        "model_dynamic_range_db": 41.585742403266195,
+        "real_peak": 0.57623291015625,
+        "model_peak": 0.5141754150390625,
+        "real_rms": 0.0623973086476326,
+        "model_rms": 0.05395759269595146,
+        "real_crest_factor_db": 19.308643995292464,
+        "model_crest_factor_db": 19.58117481991879
+      }
+    }
+  }
+}

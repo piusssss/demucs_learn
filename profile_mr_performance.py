@@ -79,7 +79,7 @@ for idx, encode in enumerate(model.encoder):
     if model.share:
         params = sum(p.numel() for p in encode.parameters())
         encoder_params.append(params)
-        print(f"Encoder Layer {idx} (shared): {params/1e6:.2f}M")
+        print(f"Encoder Layer {idx} (freq, shared): {params/1e6:.2f}M")
     else:
         layer_params = []
         for window_idx, enc in enumerate(encode):
@@ -87,9 +87,19 @@ for idx, encode in enumerate(model.encoder):
             layer_params.append(params)
         total_layer_params = sum(layer_params)
         encoder_params.append(total_layer_params)
-        print(f"Encoder Layer {idx} ({len(encode)} windows): {total_layer_params/1e6:.2f}M")
+        print(f"Encoder Layer {idx} (freq, {len(encode)} windows): {total_layer_params/1e6:.2f}M")
         for window_idx, params in enumerate(layer_params):
             print(f"  └─ Window {window_idx}: {params/1e6:.2f}M")
+
+# Time encoder parameters
+tencoder_params = []
+if hasattr(model, 'tencoder') and len(model.tencoder) > 0:
+    for idx, tenc in enumerate(model.tencoder):
+        params = sum(p.numel() for p in tenc.parameters())
+        tencoder_params.append(params)
+        print(f"Time Encoder Layer {idx}: {params/1e6:.2f}M")
+else:
+    print("\nTime Encoder: 0.00M (disabled)")
 
 # Transformer parameters
 if model.crosstransformer:
@@ -105,7 +115,7 @@ for idx, decode in enumerate(model.decoder):
     if model.share:
         params = sum(p.numel() for p in decode.parameters())
         decoder_params.append(params)
-        print(f"Decoder Layer {idx} (shared): {params/1e6:.2f}M")
+        print(f"Decoder Layer {idx} (freq, shared): {params/1e6:.2f}M")
     else:
         layer_params = []
         for window_idx, dec in enumerate(decode):
@@ -113,9 +123,19 @@ for idx, decode in enumerate(model.decoder):
             layer_params.append(params)
         total_layer_params = sum(layer_params)
         decoder_params.append(total_layer_params)
-        print(f"Decoder Layer {idx} ({len(decode)} windows): {total_layer_params/1e6:.2f}M")
+        print(f"Decoder Layer {idx} (freq, {len(decode)} windows): {total_layer_params/1e6:.2f}M")
         for window_idx, params in enumerate(layer_params):
             print(f"  └─ Window {window_idx}: {params/1e6:.2f}M")
+
+# Time decoder parameters
+tdecoder_params = []
+if hasattr(model, 'tdecoder') and len(model.tdecoder) > 0:
+    for idx, tdec in enumerate(model.tdecoder):
+        params = sum(p.numel() for p in tdec.parameters())
+        tdecoder_params.append(params)
+        print(f"Time Decoder Layer {idx}: {params/1e6:.2f}M")
+else:
+    print("\nTime Decoder: 0.00M (disabled)")
 
 # Frequency embedding
 if hasattr(model, 'freq_emb') and model.freq_emb is not None:
@@ -134,13 +154,19 @@ print(f"\n{'='*60}")
 print(f"Parameter Summary")
 print(f"{'='*60}\n")
 total_encoder_params = sum(encoder_params)
+total_tencoder_params = sum(tencoder_params) if tencoder_params else 0
 total_decoder_params = sum(decoder_params)
-other_params = total_params - total_encoder_params - total_decoder_params - transformer_params - freq_emb_params - fusion_params
+total_tdecoder_params = sum(tdecoder_params) if tdecoder_params else 0
+other_params = total_params - total_encoder_params - total_tencoder_params - total_decoder_params - total_tdecoder_params - transformer_params - freq_emb_params - fusion_params
 
 print(f"{'Component':<30} {'Parameters':<15} {'Percentage':<10}")
 print(f"{'-'*55}")
-print(f"{'Encoders (all layers)':<30} {total_encoder_params/1e6:>13.2f}M {total_encoder_params/total_params*100:>8.1f}%")
-print(f"{'Decoders (all layers)':<30} {total_decoder_params/1e6:>13.2f}M {total_decoder_params/total_params*100:>8.1f}%")
+print(f"{'Encoders (freq, all layers)':<30} {total_encoder_params/1e6:>13.2f}M {total_encoder_params/total_params*100:>8.1f}%")
+if total_tencoder_params > 0:
+    print(f"{'Encoders (time, all layers)':<30} {total_tencoder_params/1e6:>13.2f}M {total_tencoder_params/total_params*100:>8.1f}%")
+print(f"{'Decoders (freq, all layers)':<30} {total_decoder_params/1e6:>13.2f}M {total_decoder_params/total_params*100:>8.1f}%")
+if total_tdecoder_params > 0:
+    print(f"{'Decoders (time, all layers)':<30} {total_tdecoder_params/1e6:>13.2f}M {total_tdecoder_params/total_params*100:>8.1f}%")
 if transformer_params > 0:
     print(f"{'Transformer':<30} {transformer_params/1e6:>13.2f}M {transformer_params/total_params*100:>8.1f}%")
 if freq_emb_params > 0:
@@ -207,6 +233,13 @@ with torch.no_grad():
         mean_list.append(mean)
         std_list.append(std)
         x_list.append(x)
+    
+    # Time branch normalization
+    xt = mix
+    meant = xt.mean(dim=(1, 2), keepdim=True)
+    stdt = xt.std(dim=(1, 2), keepdim=True)
+    xt = (xt - meant) / (1e-5 + stdt)
+    
     if device == "cuda":
         torch.cuda.synchronize()
     times['2_normalize'] = time.time() - start
@@ -227,20 +260,34 @@ with torch.no_grad():
     saved = []
     saved_shapes = []
     lengths = []
+    saved_t = []  # Time branch skip connections
+    lengths_t = []  # Time branch lengths
     out_shapes = [(B, C*len(model.sources), 1, Fq, T) for Fq, T in shapes_list]
     saved_shapes.append(out_shapes)
     
     encoder_times = []
+    tencoder_times = []
     window_creation_times = []
     
     for idx, encode in enumerate(model.encoder):
+        # Time branch encoder
+        start_t = time.time()
+        inject = None
+        if hasattr(model, 'tencoder') and idx < len(model.tencoder):
+            lengths_t.append(xt.shape[-1])
+            tenc = model.tencoder[idx]
+            xt = tenc(xt)
+            saved_t.append(xt)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        tencoder_times.append(time.time() - start_t)
+        
         # Encoding
         start = time.time()
         encoded_windows = []
         encoded_shapes = []
         for window_idx, x in enumerate(aligned_windows):
             lengths.append(x.shape[-1])
-            inject = None
             
             if model.share:
                 x_encoded = encode(x, inject)
@@ -274,6 +321,8 @@ with torch.no_grad():
     
     for idx, t in enumerate(encoder_times):
         times[f'4_encoder_layer_{idx}'] = t
+    for idx, t in enumerate(tencoder_times):
+        times[f'4_tencoder_layer_{idx}'] = t
     for idx, t in enumerate(window_creation_times):
         times[f'4_window_creation_{idx}'] = t
     
@@ -281,7 +330,12 @@ with torch.no_grad():
     if model.crosstransformer:
         start = time.time()
         aligned_windows[0] = aligned_windows[0].squeeze(2)
-        aligned_windows[0] = model.crosstransformer(aligned_windows[0])
+        if hasattr(model, 'tencoder') and len(model.tencoder) > 0:
+            # Cross-attention with time branch
+            aligned_windows[0], xt = model.crosstransformer(aligned_windows[0], xt)
+        else:
+            # Self-attention only
+            aligned_windows[0] = model.crosstransformer(aligned_windows[0])
         aligned_windows[0] = aligned_windows[0].unsqueeze(2)
         if device == "cuda":
             torch.cuda.synchronize()
@@ -292,6 +346,7 @@ with torch.no_grad():
     # ========== 6. Decoder layers ==========
     saved_shapes.pop(-1)
     decoder_times = []
+    tdecoder_times = []
     split_times = []
     
     for idx, decode in enumerate(model.decoder):
@@ -315,6 +370,17 @@ with torch.no_grad():
             torch.cuda.synchronize()
         decoder_times.append(time.time() - start)
         
+        # Time branch decoder
+        start_t = time.time()
+        if hasattr(model, 'tdecoder') and idx < len(model.tdecoder):
+            tdec = model.tdecoder[idx]
+            length_t = lengths_t.pop(-1)
+            skip_t = saved_t.pop(-1)
+            xt, _ = tdec(xt, skip_t, length_t)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        tdecoder_times.append(time.time() - start_t)
+        
         # Split windows
         start = time.time()
         from demucs.htdemucs_mr import split_windows
@@ -330,6 +396,8 @@ with torch.no_grad():
     
     for idx, t in enumerate(decoder_times):
         times[f'6_decoder_layer_{idx}'] = t
+    for idx, t in enumerate(tdecoder_times):
+        times[f'6_tdecoder_layer_{idx}'] = t
     for idx, t in enumerate(split_times):
         times[f'6_split_windows_{idx}'] = t
     
@@ -365,14 +433,30 @@ with torch.no_grad():
         torch.cuda.synchronize()
     times['9_istft_all'] = time.time() - start
     
-    # ========== 10. Multi-resolution fusion ==========
+    # ========== 10. Multi-resolution fusion + Time branch ==========
     start = time.time()
-    final_weights = torch.nn.functional.softmax(model.final_fusion_weights, dim=1)
+    
+    # Time branch denormalization
+    if hasattr(model, 'tdecoder') and len(model.tdecoder) > 0:
+        xt = xt.view(B, S, -1, length)
+        xt = xt * stdt[:, None] + meant[:, None]
+    
+    # Sinkhorn fusion
+    final_weights = torch.exp(model.final_fusion_weights)
+    for _ in range(5):
+        final_weights = final_weights / final_weights.sum(dim=1, keepdim=True)
+        final_weights = final_weights / final_weights.sum(dim=0, keepdim=True)
+    
     B, S, C, T = x_time_list[0].shape
     x = torch.zeros_like(x_time_list[0])
     for s in range(S):
         for r in range(model.num_resolutions):
             x[:, s] += final_weights[s, r] * x_time_list[r][:, s]
+    
+    # Add time branch if exists
+    if hasattr(model, 'tdecoder') and len(model.tdecoder) > 0:
+        x = xt + x
+    
     if device == "cuda":
         torch.cuda.synchronize()
     times['10_fusion'] = time.time() - start
@@ -393,7 +477,9 @@ execution_order = [
 
 # Encoder layers
 for idx in range(len(model.encoder)):
-    execution_order.append((f'4_encoder_layer_{idx}', f'Encoder Layer {idx}'))
+    execution_order.append((f'4_encoder_layer_{idx}', f'Encoder Layer {idx} (freq)'))
+    if hasattr(model, 'tencoder') and idx < len(model.tencoder):
+        execution_order.append((f'4_tencoder_layer_{idx}', f'  ├─ Time Encoder Layer {idx}'))
     execution_order.append((f'4_window_creation_{idx}', f'  └─ Window creation after Layer {idx}'))
 
 # Transformer
@@ -401,7 +487,9 @@ execution_order.append(('5_transformer', 'Transformer (bottleneck)'))
 
 # Decoder layers
 for idx in range(len(model.decoder)):
-    execution_order.append((f'6_decoder_layer_{idx}', f'Decoder Layer {idx}'))
+    execution_order.append((f'6_decoder_layer_{idx}', f'Decoder Layer {idx} (freq)'))
+    if hasattr(model, 'tdecoder') and idx < len(model.tdecoder):
+        execution_order.append((f'6_tdecoder_layer_{idx}', f'  ├─ Time Decoder Layer {idx}'))
     execution_order.append((f'6_split_windows_{idx}', f'  └─ Split windows after Layer {idx}'))
 
 # Post-processing
@@ -409,7 +497,7 @@ execution_order.extend([
     ('7_denormalize', 'Denormalization'),
     ('8_masking', 'Masking (CAC)'),
     ('9_istft_all', 'iSTFT (all resolutions)'),
-    ('10_fusion', 'Multi-resolution fusion'),
+    ('10_fusion', 'Sinkhorn Fusion + Time branch'),
 ])
 
 print(f"{'Step':<50} {'Time (ms)':<12} {'%':<8}")
