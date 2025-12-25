@@ -23,6 +23,10 @@ Session.vim
 *.aac
 *.ogg
 *.m4a
+*.png
+*.json
+*.md
+*.txt
 
 # Ignore paper folder (confidential research materials)
 /paper/

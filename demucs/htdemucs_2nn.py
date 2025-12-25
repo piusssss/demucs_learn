@@ -27,7 +27,7 @@ class HTDemucs_2nn(nn.Module):
         channels_time=None,
         growth=2,
         # STFT
-        nfft_list=[2048, 4096, 8192],  # Multi-resolution STFT window sizes
+        nfft_list=[2048, 3072,4096, 6144,8192],  # Multi-resolution STFT window sizes
         wiener_iters=0,
         end_iters=0,
         wiener_residual=False,

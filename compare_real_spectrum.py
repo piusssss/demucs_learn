@@ -21,7 +21,7 @@ import pandas as pd
 # 在这里硬编码你的配置
 
 # 模型配置
-MODEL_NAME = "htt100"  # 要对比的模型名称
+MODEL_NAME = "e248_150"  # 要对比的模型名称
 
 # MUSDB歌曲目录（包含mixture.wav和各源的.wav文件）
 MUSDB_TRACK_DIR = r"data\musdb18_hq_test\test\Carlos Gonzalez - A Place For Us"
