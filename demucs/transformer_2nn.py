@@ -531,7 +531,7 @@ class CrossTransformerEncoder(nn.Module):
         hidden_scale: float = 4.0,
         num_heads: int = 8,
         num_layers: int = 6,
-        cross_first: bool = False,
+        cross: bool = False,
         dropout: float = 0.0,
         max_positions: int = 1000,
         norm_in: bool = True,
@@ -569,7 +569,7 @@ class CrossTransformerEncoder(nn.Module):
         self.num_layers = num_layers
         # classic parity = 1 means that if idx%2 == 1 there is a
         # classical encoder else there is a cross encoder
-        self.classic_parity = 1 if cross_first else 0
+        self.cross = cross
         self.emb = emb
         self.max_period = max_period
         self.weight_decay = weight_decay
@@ -633,7 +633,7 @@ class CrossTransformerEncoder(nn.Module):
         })
 
         for idx in range(num_layers):
-            if idx % 2 == self.classic_parity:
+            if not self.cross:
 
                 self.layers.append(MyTransformerEncoderLayer(**kwargs_classic_encoder))
                 self.layers_t.append(
@@ -681,13 +681,11 @@ class CrossTransformerEncoder(nn.Module):
         xt = xt + self.weight_pos_embed * pos_emb
 
         for idx in range(self.num_layers):
-            if idx % 2 == self.classic_parity:
+            if not self.cross:
                 x = self.layers[idx](x)
                 xt = self.layers_t[idx](xt)
             else:
-                old_x = x
-                x = self.layers[idx](x, xt)
-                xt = self.layers_t[idx](xt, old_x)
+                xt = self.layers_t[idx](xt, x)
 
         # Split back to individual resolutions
         lengths = [Fr * T1 for Fr, T1 in shapes]

@@ -8,14 +8,92 @@ from fractions import Fraction
 from einops import rearrange
 
 from .transformer_single import CrossTransformerEncoder as SingleCrossTransformerEncoder
-from .transformer import CrossTransformerEncoder  # Original bidirectional transformer
+from .transformer_2nn import CrossTransformerEncoder as ConcatCrossTransformerEncoder
 
 from .demucs import rescale_module
 from .states import capture_init
 from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, HDecLayer
 
+class AdaptiveResolutionSelector(nn.Module):
+    def __init__(self, num_branches, audio_channels, hidden_channels=32, stride=256):
+        super().__init__()
+        self.audio_channels = audio_channels
+        self.num_branches = num_branches
+        self.stride = stride
+        
+        self.layer1_conv = nn.Conv1d(
+            audio_channels * num_branches, 
+            hidden_channels, 
+            kernel_size=stride * 2 + 1, 
+            stride=stride, 
+            padding=stride
+        )
+        self.layer1_act = nn.GELU()
 
+        self.layer2_conv = nn.Conv1d(
+            hidden_channels, 
+            hidden_channels, 
+            kernel_size=7, 
+            padding=3,  # padding = kernel // 2，保持长度不变
+            groups=1    # 允许通道间交互信息
+        )
+        self.layer2_act = nn.GELU()
+
+        self.layer3_conv = nn.Conv1d(
+            hidden_channels, 
+            num_branches * audio_channels, 
+            kernel_size=1
+        )
+        
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, branches):
+        # branches: List of [B, S, C, T]
+        # 堆叠分支 -> [B, S, N, C, T]
+        stack = torch.stack(branches, dim=2) 
+        B, S, N, C, T = stack.shape
+        
+        input_feats = stack.abs().view(B * S, N * C, T)
+        
+        x = self.layer1_act(self.layer1_conv(input_feats))
+        
+        x = self.layer2_act(self.layer2_conv(x))
+        
+        low_res_logits = self.layer3_conv(x)
+        
+        full_res_logits = F.interpolate(
+            low_res_logits, 
+            size=T, 
+            mode='linear', 
+            align_corners=False
+        )
+        
+        weights = full_res_logits.view(B, S, N, C, T)
+        weights = self.softmax(weights)
+
+        # --- 5. 训练监控 (Optional) ---
+        if self.training and torch.rand(1).item() < 0.005: 
+            with torch.no_grad():
+                # 统计平均权重 (Dim 0,1,3,4 -> 只保留 Branch 维度)
+                mean_weights = weights.mean(dim=(0, 1, 3, 4)) 
+                
+                # 统计活跃度 (Std over Time)
+                std_over_time = weights.std(dim=4).mean(dim=(0, 1, 3))
+                
+                # 统计最大自信度
+                max_conf = weights.max(dim=4)[0].mean(dim=(0, 1, 3))
+
+                print(f"[ARS v2 Monitor]")
+                print(f"> Mean Weights: {mean_weights.cpu().numpy().round(3)}") 
+                print(f"> Activity (Std): {std_over_time.cpu().numpy().round(3)}")
+                print(f"> Max Confidence: {max_conf.cpu().numpy().round(3)}")
+                
+        out = (stack * weights).sum(dim=2) 
+        
+        return out
+    
+    
 class HTDemucs_2nns(nn.Module):
 
     @capture_init
@@ -60,7 +138,7 @@ class HTDemucs_2nns(nn.Module):
         t_layers=1,
         t_emb="sin",
         t_hidden_scale=4.0,
-        t_heads=8,
+        t_heads=4,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -117,6 +195,7 @@ class HTDemucs_2nns(nn.Module):
         self.hop_lengths = [nfft // 2 for nfft in nfft_list]
         self.wiener_iters = wiener_iters
         self.end_iters = end_iters
+        self.t_layers = t_layers
         self.freq_emb = None
         assert wiener_iters == end_iters
 
@@ -132,14 +211,20 @@ class HTDemucs_2nns(nn.Module):
         # EMA buffer for smooth weight updates (similar to optimizer momentum)
         self.register_buffer('weight_ema', torch.ones(self.num_resolutions) / self.num_resolutions)
         self.weight_momentum = 0.9  
-        '''
+
         # Source-specific fusion weights for final time-domain fusion
         self.final_fusion_weights = nn.Parameter(
-            torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions
+            torch.ones(len(self.sources), self.num_resolutions+1) / (self.num_resolutions+1)
         )
+
         self.register_buffer('final_weight_ema', torch.ones(len(self.sources), self.num_resolutions) / self.num_resolutions)
         self.final_weight_momentum = 0.9  
         
+        self.fusion_layer = AdaptiveResolutionSelector(
+            num_branches=self.num_resolutions + 1,
+            audio_channels=audio_channels
+        )
+        '''
         chin = audio_channels
         chin_z = chin  # number of channels for the freq branch
         if self.cac:
@@ -259,208 +344,88 @@ class HTDemucs_2nns(nn.Module):
 
             transformer_channels = bottom_channels
 
+        self.unit_transformers = nn.ModuleList()
         # Create separate self-attention transformers for each resolution and time domain
-        if t_layers > 0:
-            # Frequency domain self-attention transformers (one per resolution)
-            self.freq_transformers = nn.ModuleList()
-            for res_idx in range(self.num_resolutions):
-                freq_transformer = SingleCrossTransformerEncoder(
-                    dim=transformer_channels,
-                    freq=True,
-                    emb=t_emb,
-                    hidden_scale=t_hidden_scale,
-                    num_heads=t_heads,
-                    num_layers=t_layers,
-                    cross_first=False,  # Self-attention only
-                    dropout=t_dropout,
-                    max_positions=t_max_positions,
-                    norm_in=t_norm_in,
-                    norm_in_group=t_norm_in_group,
-                    group_norm=t_group_norm,
-                    norm_first=t_norm_first,
-                    norm_out=t_norm_out,
-                    max_period=t_max_period,
-                    weight_decay=t_weight_decay,
-                    lr=t_lr,
-                    layer_scale=t_layer_scale,
-                    gelu=t_gelu,
-                    sin_random_shift=t_sin_random_shift,
-                    weight_pos_embed=t_weight_pos_embed,
-                    cape_mean_normalize=t_cape_mean_normalize,
-                    cape_augment=t_cape_augment,
-                    cape_glob_loc_scale=t_cape_glob_loc_scale,
-                    sparse_self_attn=t_sparse_self_attn,
-                    sparse_cross_attn=t_sparse_cross_attn,
-                    mask_type=t_mask_type,
-                    mask_random_seed=t_mask_random_seed,
-                    sparse_attn_window=t_sparse_attn_window,
-                    global_window=t_global_window,
-                    sparsity=t_sparsity,
-                    auto_sparsity=t_auto_sparsity,
-                )
-                self.freq_transformers.append(freq_transformer)
+        for idx in range(t_layers):
+            kwtran = {
+                "dim": transformer_channels,
+                "emb": t_emb,
+                "hidden_scale": t_hidden_scale,
+                "num_heads": t_heads,
+                "dropout": t_dropout,
+                "max_positions": t_max_positions,
+                "norm_in": t_norm_in,
+                "norm_in_group": t_norm_in_group,
+                "group_norm": t_group_norm,
+                "norm_first": t_norm_first,
+                "norm_out": t_norm_out,
+                "max_period": t_max_period,
+                "weight_decay": t_weight_decay,
+                "lr": t_lr,
+                "layer_scale": t_layer_scale,
+                "gelu": t_gelu,
+                "sin_random_shift": t_sin_random_shift,
+                "weight_pos_embed": t_weight_pos_embed,
+                "cape_mean_normalize": t_cape_mean_normalize,
+                "cape_augment": t_cape_augment,
+                "cape_glob_loc_scale": t_cape_glob_loc_scale,
+                "sparse_self_attn": t_sparse_self_attn,
+                "sparse_cross_attn": t_sparse_cross_attn,
+                "mask_type": t_mask_type,
+                "mask_random_seed": t_mask_random_seed,
+                "sparse_attn_window": t_sparse_attn_window,
+                "global_window": t_global_window,
+                "sparsity": t_sparsity,
+                "auto_sparsity": t_auto_sparsity,
+            }
+            self.block_transformers = nn.ModuleList()
             
-            # Time domain self-attention transformer
-            self.time_transformer = SingleCrossTransformerEncoder(
-                dim=transformer_channels,
-                emb=t_emb,
-                freq=False,
-                hidden_scale=t_hidden_scale,
-                num_heads=t_heads,
-                num_layers=t_layers,
-                cross_first=False,  # Self-attention only
-                dropout=t_dropout,
-                max_positions=t_max_positions,
-                norm_in=t_norm_in,
-                norm_in_group=t_norm_in_group,
-                group_norm=t_group_norm,
-                norm_first=t_norm_first,
-                norm_out=t_norm_out,
-                max_period=t_max_period,
-                weight_decay=t_weight_decay,
-                lr=t_lr,
-                layer_scale=t_layer_scale,
-                gelu=t_gelu,
-                sin_random_shift=t_sin_random_shift,
-                weight_pos_embed=t_weight_pos_embed,
-                cape_mean_normalize=t_cape_mean_normalize,
-                cape_augment=t_cape_augment,
-                cape_glob_loc_scale=t_cape_glob_loc_scale,
-                sparse_self_attn=t_sparse_self_attn,
-                sparse_cross_attn=t_sparse_cross_attn,
-                mask_type=t_mask_type,
-                mask_random_seed=t_mask_random_seed,
-                sparse_attn_window=t_sparse_attn_window,
-                global_window=t_global_window,
-                sparsity=t_sparsity,
-                auto_sparsity=t_auto_sparsity,
+            self.time_to_concatfreq_cross_transformers = ConcatCrossTransformerEncoder(
+                cross=True, num_resolutions=self.num_resolutions, num_layers = 2, **kwtran 
             )
             
-            # Cross-attention transformers for neighbor resolution interaction
-            # Need 2*(n-1) transformers: (n-1) for forward scan + (n-1) for backward scan
-            # For 5 resolutions: 2*4 = 8 transformers
-            self.freq_cross_forward = nn.ModuleList()  # High res attends to low res
-            self.freq_cross_backward = nn.ModuleList()  # Low res attends to high res
-            
-            for pair_idx in range(self.num_resolutions - 1):  # 4 pairs for 5 resolutions
-                # Forward: high resolution attends to low resolution
-                forward_transformer = SingleCrossTransformerEncoder(
-                    dim=transformer_channels,
-                    freq=True,
-                    emb=t_emb,
-                    hidden_scale=t_hidden_scale,
-                    num_heads=t_heads,
-                    num_layers=t_layers,  # Single layer for cross-attention
-                    cross_first=True,  # Cross-attention mode
-                    dropout=t_dropout,
-                    max_positions=t_max_positions,
-                    norm_in=t_norm_in,
-                    norm_in_group=t_norm_in_group,
-                    group_norm=t_group_norm,
-                    norm_first=t_norm_first,
-                    norm_out=t_norm_out,
-                    max_period=t_max_period,
-                    weight_decay=t_weight_decay,
-                    lr=t_lr,
-                    layer_scale=t_layer_scale,
-                    gelu=t_gelu,
-                    sin_random_shift=t_sin_random_shift,
-                    weight_pos_embed=t_weight_pos_embed,
-                    cape_mean_normalize=t_cape_mean_normalize,
-                    cape_augment=t_cape_augment,
-                    cape_glob_loc_scale=t_cape_glob_loc_scale,
-                    sparse_self_attn=t_sparse_self_attn,
-                    sparse_cross_attn=t_sparse_cross_attn,
-                    mask_type=t_mask_type,
-                    mask_random_seed=t_mask_random_seed,
-                    sparse_attn_window=t_sparse_attn_window,
-                    global_window=t_global_window,
-                    sparsity=t_sparsity,
-                    auto_sparsity=t_auto_sparsity,
-                )
-                self.freq_cross_forward.append(forward_transformer)
-                
-                # Backward: low resolution attends to high resolution
-                backward_transformer = SingleCrossTransformerEncoder(
-                    dim=transformer_channels,
-                    freq=True,
-                    emb=t_emb,
-                    hidden_scale=t_hidden_scale,
-                    num_heads=t_heads,
-                    num_layers=t_layers,  # Single layer for cross-attention
-                    cross_first=True,  # Cross-attention mode
-                    dropout=t_dropout,
-                    max_positions=t_max_positions,
-                    norm_in=t_norm_in,
-                    norm_in_group=t_norm_in_group,
-                    group_norm=t_group_norm,
-                    norm_first=t_norm_first,
-                    norm_out=t_norm_out,
-                    max_period=t_max_period,
-                    weight_decay=t_weight_decay,
-                    lr=t_lr,
-                    layer_scale=t_layer_scale,
-                    gelu=t_gelu,
-                    sin_random_shift=t_sin_random_shift,
-                    weight_pos_embed=t_weight_pos_embed,
-                    cape_mean_normalize=t_cape_mean_normalize,
-                    cape_augment=t_cape_augment,
-                    cape_glob_loc_scale=t_cape_glob_loc_scale,
-                    sparse_self_attn=t_sparse_self_attn,
-                    sparse_cross_attn=t_sparse_cross_attn,
-                    mask_type=t_mask_type,
-                    mask_random_seed=t_mask_random_seed,
-                    sparse_attn_window=t_sparse_attn_window,
-                    global_window=t_global_window,
-                    sparsity=t_sparsity,
-                    auto_sparsity=t_auto_sparsity,
-                )
-                self.freq_cross_backward.append(backward_transformer)
-            
-            # Cross-attention transformers for time-frequency interaction
-            # Use original bidirectional CrossTransformerEncoder
-            self.time_freq_cross_transformers = nn.ModuleList()
+            self.freq_to_time_cross_transformers = nn.ModuleList()
             for res_idx in range(self.num_resolutions):
-                cross_transformer = CrossTransformerEncoder(
-                    dim=transformer_channels,
-                    emb=t_emb,
-                    hidden_scale=t_hidden_scale,
-                    num_heads=t_heads,
-                    num_layers=t_layers,  # Single layer for cross-attention
-                    cross_first=True,  # Cross-attention mode (bidirectional)
-                    dropout=t_dropout,
-                    max_positions=t_max_positions,
-                    norm_in=t_norm_in,
-                    norm_in_group=t_norm_in_group,
-                    group_norm=t_group_norm,
-                    norm_first=t_norm_first,
-                    norm_out=t_norm_out,
-                    max_period=t_max_period,
-                    weight_decay=t_weight_decay,
-                    lr=t_lr,
-                    layer_scale=t_layer_scale,
-                    gelu=t_gelu,
-                    sin_random_shift=t_sin_random_shift,
-                    weight_pos_embed=t_weight_pos_embed,
-                    cape_mean_normalize=t_cape_mean_normalize,
-                    cape_augment=t_cape_augment,
-                    cape_glob_loc_scale=t_cape_glob_loc_scale,
-                    sparse_self_attn=t_sparse_self_attn,
-                    sparse_cross_attn=t_sparse_cross_attn,
-                    mask_type=t_mask_type,
-                    mask_random_seed=t_mask_random_seed,
-                    sparse_attn_window=t_sparse_attn_window,
-                    global_window=t_global_window,
-                    sparsity=t_sparsity,
-                    auto_sparsity=t_auto_sparsity,
+                self.freq_to_time_cross_transformers.append(
+                    SingleCrossTransformerEncoder(freq=True, cross_first=True, num_layers = 1, **kwtran)
                 )
-                self.time_freq_cross_transformers.append(cross_transformer)
-        else:
-            self.freq_transformers = None
-            self.time_transformer = None
-            self.freq_cross_forward = None
-            self.freq_cross_backward = None
-            self.time_freq_cross_transformers = None
+                
+            self.freq_self_transformers = nn.ModuleList()
+            for res_idx in range(self.num_resolutions):
+                self.freq_self_transformers.append(
+                    SingleCrossTransformerEncoder(freq=True, cross_first=False, num_layers = 1, **kwtran)
+                )
+            
+            self.time_self_transformer = SingleCrossTransformerEncoder(
+                freq=False, cross_first=False, num_layers = 1, **kwtran
+            )
+            
+            self.block_transformers.append(self.freq_self_transformers)
+            self.block_transformers.append(self.time_self_transformer)
+            self.block_transformers.append(self.time_to_concatfreq_cross_transformers)
+            self.block_transformers.append(self.freq_to_time_cross_transformers)
+            
+            if idx == t_layers-1:
+                self.freq_self_transformers = nn.ModuleList()
+                for res_idx in range(self.num_resolutions):
+                    self.freq_self_transformers.append(
+                        SingleCrossTransformerEncoder(freq=True, cross_first=False, num_layers = 1, **kwtran)
+                    )
+                
+                self.time_self_transformer = SingleCrossTransformerEncoder(
+                    freq=False, cross_first=False, num_layers = 1, **kwtran
+                )
+                self.block_transformers.append(self.freq_self_transformers)
+                self.block_transformers.append(self.time_self_transformer)
+                
+            self.unit_transformers.append(self.block_transformers)
+            
+        if t_layers == 0:
+            self.unit_transformers = None
+            self.time_to_concatfreq_cross_transformers = None
+            self.freq_to_time_cross_transformers = None
+            self.freq_self_transformers = None
+            self.time_self_transformer = None
 
     def _spec(self, x, nfft=None, hop_length=None):
         hl = hop_length
@@ -642,44 +607,35 @@ class HTDemucs_2nns(nn.Module):
             for res_idx in range(self.num_resolutions):
                 saved_list[res_idx].append(x_list[res_idx])
         
-        # Apply transformers: self-attention -> neighbor cross-attention -> time cross-attention
-        if self.freq_transformers is not None:
-            # Step 1: Self-attention for each frequency resolution and time domain
-            for res_idx in range(self.num_resolutions):
-                x_list[res_idx], _ = self.freq_transformers[res_idx](x_list[res_idx], xt)
+        if self.unit_transformers is not None:
             
-            _, xt = self.time_transformer(x_list[0], xt)
+            # Transformer processing (Transformation)
+            for idx in range(self.t_layers):
+                # Step 1: Self-Refinement - Freq自注意
+                for res_idx in range(self.num_resolutions):
+                    x_list[res_idx], _ = self.unit_transformers[idx][0][res_idx](x_list[res_idx], xt)
+                
+                # Step 2: Self-Refinement - Time自注意
+                _, xt = self.unit_transformers[idx][1](x_list[0], xt)
             
-            # Step 2: Neighbor resolution cross-attention (bidirectional scan + 0.5 fusion)
-            x_forward = [x.clone() for x in x_list]
-            for i in range(1, self.num_resolutions):
-                x_forward[i], _ = self.freq_cross_forward[i-1](x_forward[i], x_forward[i-1])
-            
-            # Backward scan: low resolution attends to high resolution
-            x_backward = [x.clone() for x in x_list]
-            for i in range(self.num_resolutions - 2, -1, -1):
-                x_backward[i], _ = self.freq_cross_backward[i](x_backward[i], x_backward[i+1])
-            
-            x_list[0] = x_backward[0]  # 2048: only backward is processed
-            x_list[self.num_resolutions - 1] = x_forward[self.num_resolutions - 1]  # 8192: only forward is processed
-            for i in range(1, self.num_resolutions - 1):
-                x_list[i] =  x_forward[i] +  x_backward[i]  # Middle: both processed
-            
-            
-            # Step 3: Time-frequency cross-attention (each resolution independently)
-            xt_orig = xt.clone()  # Save original xt
-            xt_list = []  # Collect xt results from each resolution
-            
-            for res_idx in range(self.num_resolutions):
-                x_list[res_idx], xt_updated = self.time_freq_cross_transformers[res_idx](
-                    x_list[res_idx], xt_orig
-                )
-                xt_list.append(xt_updated)
-            
-            # Average all xt results
-            xt = sum(xt_list)
-            
-
+                # Step 3: Aggregation - Time看concat的Freq
+                _, xt = self.unit_transformers[idx][2](x_list, xt)
+                
+                # Step 4: Broadcast - Freq看Time
+                for res_idx in range(self.num_resolutions):
+                    x_list[res_idx], _ = self.unit_transformers[idx][3][res_idx](
+                        x_list[res_idx], xt
+                    )
+                    
+                if idx == self.t_layers-1:
+                    # Step 5: Self-Refinement - Freq自注意
+                    for res_idx in range(self.num_resolutions):
+                        x_list[res_idx], _ = self.unit_transformers[idx][4][res_idx](x_list[res_idx], xt)
+                    
+                    # Step 6: Self-Refinement - Time自注意
+                    _, xt = self.unit_transformers[idx][5](x_list[0], xt)
+                    
+                    
         for idx in range(self.depth):
             # Decode all resolutions in parallel
             for res_idx in range(self.num_resolutions):
@@ -748,33 +704,9 @@ class HTDemucs_2nns(nn.Module):
             xt = xt.view(B, S, -1, length)
         xt = xt * stdt[:, None] + meant[:, None]
         
-        # Two-stage normalization: column first, then row (no iteration)
-        final_weights = torch.exp(self.final_fusion_weights)  # [S, num_res], ensure positive
-        # Stage 1: Normalize columns (each resolution/column sums to 1) - dim=0 is sources
-        final_weights = final_weights / final_weights.sum(dim=0, keepdim=True)
-        # Stage 2: Normalize rows (each source/row sums to 1) - dim=1 is resolutions
-        final_weights = final_weights / final_weights.sum(dim=1, keepdim=True)
-        
-        if self.training:
-            with torch.no_grad():
-                self.final_weight_ema = self.final_weight_momentum * self.final_weight_ema + (1 - self.final_weight_momentum) * final_weights.detach()
-            weights = (1 - self.final_weight_momentum) * final_weights + self.final_weight_momentum * self.final_weight_ema.detach()
-        else:
-            weights = final_weights 
-            
-        # Initialize output
-        B, S, C, T = x_time_list[0].shape
-        x = torch.zeros_like(x_time_list[0])
-        
-        #weights = torch.ones(len(self.sources), self.num_resolutions, device=weights.device) / self.num_resolutions
-        # Apply source-specific weights
-        for s in range(S):
-            for r in range(self.num_resolutions):
-                x[:, s] += weights[s, r] * x_time_list[r][:, s]
-        
-        # Add time domain branch
-        x = xt + x
+        for x in x_time_list:
+            xt+=x
         
         if length_pre_pad:
             x = x[..., :length_pre_pad]
-        return x
+        return xt

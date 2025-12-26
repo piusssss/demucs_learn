@@ -110,7 +110,21 @@ def check_fusion_weights(model_path):
         # 2. 检查nn模型的双组权重
         if 'final_fusion_weights' in state_dict:
             found_weights = True
-            print("\n✅ 发现htdemucs_nn模型（双权重结构）")
+            
+            # 检测模型类型（通过检查模型名称）
+            is_mr_model = False
+            is_2nn_model = False
+            is_2nns_model = False
+            if 'args' in checkpoint:
+                args = checkpoint['args']
+                # 检查模型名称
+                if hasattr(args, 'model'):
+                    model_name = args.model if isinstance(args.model, str) else str(args.model)
+                    is_mr_model = 'mr' in model_name.lower()
+                    is_2nn_model = '2nn' in model_name.lower()
+                    is_2nns_model = '2nns' in model_name.lower()
+            
+            print(f"\n✅ 发现htdemucs_{'2nns' if is_2nns_model else '2nn' if is_2nn_model else 'mr' if is_mr_model else 'nn'}模型（双权重结构）")
             
             # 瓶颈处的融合权重（全局）
             if 'fusion_weights' in state_dict:
@@ -119,17 +133,6 @@ def check_fusion_weights(model_path):
             
             # 最终输出的源特异性融合权重
             final_weights = state_dict['final_fusion_weights']
-            
-            # 检测模型类型（通过检查模型名称）
-            is_mr_model = False
-            is_2nn_model = False
-            if 'args' in checkpoint:
-                args = checkpoint['args']
-                # 检查模型名称
-                if hasattr(args, 'model'):
-                    model_name = args.model if isinstance(args.model, str) else str(args.model)
-                    is_mr_model = 'mr' in model_name.lower()
-                    is_2nn_model = '2nn' in model_name.lower()
             
             print(f"\n{'='*60}")
             print(f"📊 权重2: 源特异性融合（时域）")
@@ -151,7 +154,31 @@ def check_fusion_weights(model_path):
                 print(f"  {source:8s}: {weight_str}")
             
             # 根据模型类型选择归一化方式
-            if is_mr_model or is_2nn_model:
+            if is_2nns_model:
+                print(f"\n归一化方式: 朴素权重 (直接使用，无归一化)")
+                print(f"注意: 2nns模型直接使用原始权重值，不做归一化处理")
+                
+                # 直接使用原始权重
+                final_norm_display = final_weights
+                two_stage_weights = None
+                
+                # 显示原始权重值和百分比
+                print(f"\n原始权重值:")
+                for i, source in enumerate(source_names[:final_weights.shape[0]]):
+                    weights = final_weights[i]
+                    weight_str = " | ".join([f"{res}: {w:.3f}" for res, w in zip(resolutions, weights)])
+                    print(f"  {source:8s}: {weight_str}")
+                
+                # 计算每个源的权重总和，用于显示百分比
+                print(f"\n权重百分比（相对于各源的总和）:")
+                for i, source in enumerate(source_names[:final_weights.shape[0]]):
+                    weights = final_weights[i]
+                    total = weights.sum()
+                    percentages = (weights / total * 100) if total != 0 else weights * 0
+                    weight_str = " | ".join([f"{res}: {p:.1f}%" for res, p in zip(resolutions, percentages)])
+                    print(f"  {source:8s}: {weight_str} (总和={total:.3f})")
+                
+            elif is_mr_model or is_2nn_model:
                 print(f"\n归一化方式: Two-stage (column then row, no iteration)")
                 
                 # 使用两阶段归一化（与模型完全一致）
@@ -252,7 +279,7 @@ def main():
         return
     
     # 默认模型
-    default_model = "outputs/xps/248_50/checkpoint.th"
+    default_model = "outputs/xps/97d170e1/checkpoint.th"
     
     if Path(default_model).exists():
         check_fusion_weights(default_model)

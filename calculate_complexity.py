@@ -55,10 +55,40 @@ if device == "cuda":
     dummy_input = dummy_input.cuda()
 
 # Calculate FLOPs
-macs, _ = profile(model, inputs=(dummy_input,))
+try:
+    macs, _ = profile(model, inputs=(dummy_input,))
+except AttributeError as e:
+    if "'LayerNorm' object has no attribute 'total_ops'" in str(e):
+        print(f"Warning: thop compatibility issue with LayerNorm")
+        print("Skipping FLOPs calculation (this doesn't affect model functionality)")
+        macs = None
+    else:
+        raise
 
-print(f"FLOPs (MACs): {macs / 1e9:.2f} G")
+if macs is not None:
+    print(f"FLOPs (MACs): {macs / 1e9:.2f} G")
+else:
+    print("FLOPs (MACs): N/A (thop compatibility issue)")
 print(f"Parameters: {total_params / 1e6:.2f} M")
+
+# Remove thop hooks before speed test to avoid conflicts
+def remove_thop_hooks(module):
+    """Recursively remove all thop hooks from the model"""
+    if hasattr(module, '_forward_hooks'):
+        hooks_to_remove = []
+        for hook_id, hook in module._forward_hooks.items():
+            # Check if it's a thop hook
+            if hasattr(hook, '__module__') and 'thop' in str(hook.__module__):
+                hooks_to_remove.append(hook_id)
+        for hook_id in hooks_to_remove:
+            del module._forward_hooks[hook_id]
+    
+    # Recursively apply to all children
+    for child in module.children():
+        remove_thop_hooks(child)
+
+# Clean up thop hooks
+remove_thop_hooks(model)
 
 if speed:
     from demucs.apply import apply_model
