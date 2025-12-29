@@ -115,6 +115,7 @@ def check_fusion_weights(model_path):
             is_mr_model = False
             is_2nn_model = False
             is_2nns_model = False
+            is_nf_model = False
             if 'args' in checkpoint:
                 args = checkpoint['args']
                 # 检查模型名称
@@ -123,8 +124,9 @@ def check_fusion_weights(model_path):
                     is_mr_model = 'mr' in model_name.lower()
                     is_2nn_model = '2nn' in model_name.lower()
                     is_2nns_model = '2nns' in model_name.lower()
+                    is_nf_model = 'nf' in model_name.lower()
             
-            print(f"\n✅ 发现htdemucs_{'2nns' if is_2nns_model else '2nn' if is_2nn_model else 'mr' if is_mr_model else 'nn'}模型（双权重结构）")
+            print(f"\n✅ 发现htdemucs_{'nf' if is_nf_model else '2nns' if is_2nns_model else '2nn' if is_2nn_model else 'mr' if is_mr_model else 'nn'}模型（双权重结构）")
             
             # 瓶颈处的融合权重（全局）
             if 'fusion_weights' in state_dict:
@@ -154,29 +156,57 @@ def check_fusion_weights(model_path):
                 print(f"  {source:8s}: {weight_str}")
             
             # 根据模型类型选择归一化方式
-            if is_2nns_model:
-                print(f"\n归一化方式: 朴素权重 (直接使用，无归一化)")
-                print(f"注意: 2nns模型直接使用原始权重值，不做归一化处理")
+            if is_nf_model:
+                print(f"\n归一化方式: Softmax (源特异性，横向归一化)")
+                print(f"注意: NF模型使用标准softmax，每个源的权重和为1")
                 
-                # 直接使用原始权重
-                final_norm_display = final_weights
+                # 使用标准softmax归一化
+                final_norm_display = F.softmax(final_weights, dim=-1)
                 two_stage_weights = None
                 
-                # 显示原始权重值和百分比
-                print(f"\n原始权重值:")
+                # 显示归一化后的权重百分比
+                print(f"\n归一化后的权重（每行和为100%）:")
                 for i, source in enumerate(source_names[:final_weights.shape[0]]):
-                    weights = final_weights[i]
-                    weight_str = " | ".join([f"{res}: {w:.3f}" for res, w in zip(resolutions, weights)])
-                    print(f"  {source:8s}: {weight_str}")
+                    weights = final_norm_display[i]
+                    weight_str = " | ".join([f"{res}: {w*100:.1f}%" for res, w in zip(resolutions, weights)])
+                    row_sum = weights.sum()
+                    print(f"  {source:8s}: {weight_str} (行和={row_sum*100:.1f}%)")
                 
-                # 计算每个源的权重总和，用于显示百分比
+                # 显示列和（各源对同一分辨率的偏好总和）
+                col_sums = final_norm_display.sum(dim=0)
+                col_sum_str = " | ".join([f"{res}: {s*100:.1f}%" for res, s in zip(resolutions, col_sums)])
+                print(f"  {'列和':8s}: {col_sum_str}")
+                
+            elif is_2nns_model:
+                print(f"\n归一化方式: Sigmoid (独立权重，范围0-1)")
+                print(f"注意: 2nns模型使用sigmoid，每个权重独立在[0,1]范围内，不强制和为1")
+                
+                # 使用sigmoid归一化
+                final_norm_display = torch.sigmoid(final_weights)
+                two_stage_weights = None
+                
+                # 显示sigmoid后的权重值
+                print(f"\nSigmoid后的权重值（范围0-1）:")
+                for i, source in enumerate(source_names[:final_weights.shape[0]]):
+                    weights = final_norm_display[i]
+                    weight_str = " | ".join([f"{res}: {w:.3f}" for res, w in zip(resolutions, weights)])
+                    row_sum = weights.sum()
+                    print(f"  {source:8s}: {weight_str} (行和={row_sum:.3f})")
+                
+                # 显示百分比（相对于各源的总和）
                 print(f"\n权重百分比（相对于各源的总和）:")
                 for i, source in enumerate(source_names[:final_weights.shape[0]]):
-                    weights = final_weights[i]
+                    weights = final_norm_display[i]
                     total = weights.sum()
                     percentages = (weights / total * 100) if total != 0 else weights * 0
                     weight_str = " | ".join([f"{res}: {p:.1f}%" for res, p in zip(resolutions, percentages)])
-                    print(f"  {source:8s}: {weight_str} (总和={total:.3f})")
+                    print(f"  {source:8s}: {weight_str}")
+                
+                # 显示列和（各源对同一分辨率的偏好总和）
+                col_sums = final_norm_display.sum(dim=0)
+                col_sum_str = " | ".join([f"{res}: {s:.3f}" for res, s in zip(resolutions, col_sums)])
+                print(f"\n列和（各源对同一分辨率的总偏好）:")
+                print(f"  {col_sum_str}")
                 
             elif is_mr_model or is_2nn_model:
                 print(f"\n归一化方式: Two-stage (column then row, no iteration)")
@@ -229,7 +259,9 @@ def check_fusion_weights(model_path):
                 bottleneck_norm = F.softmax(bottleneck_weights, dim=0)
                 
                 # 计算最终权重的平均值（用于对比）
-                if is_mr_model or is_2nn_model:
+                if is_nf_model:
+                    final_avg = final_norm_display.mean(dim=0)
+                elif is_mr_model or is_2nn_model:
                     final_avg = final_norm_display.mean(dim=0)
                 else:
                     final_avg = final_norm_display.mean(dim=0)
@@ -239,7 +271,7 @@ def check_fusion_weights(model_path):
                 print(f"\n🔄 两组权重对比:")
                 print(f"  瓶颈权重: {' | '.join([f'{w:.1f}%' for w in bottleneck_norm * 100])}")
                 print(f"  最终平均: {' | '.join([f'{w:.1f}%' for w in final_avg * 100])}")
-                print(f"  最大差异: {diff.max():.1f}%")
+                print(f"  最大差异: {diff.max()*100:.1f}%")
                 
                 if diff.max() < 0.05:
                     print("  ⚠️  两组权重接近，源特异性不明显")

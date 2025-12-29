@@ -281,7 +281,7 @@ class MyTransformerEncoderLayer(nn.TransformerEncoderLayer):
         norm_out=False,
         layer_norm_eps=1e-5,
         layer_scale=False,
-        init_values=1e-4,
+        init_values=1e-1,
         device=None,
         dtype=None,
         sparse=False,
@@ -715,14 +715,9 @@ class CrossTransformerEncoder(nn.Module):
             res_emb = res_emb.view(1, C, 1, 1, 1).expand(B, C, min_time_steps, 1, tokens_per_group)
             all_res[:, :, :, i:i+1, :] = all_res[:, :, :, i:i+1, :] + res_emb
         
-        # Add time group positional embedding
-        # This tells the model which time group (0-53) we're in
-        time_group_pos = create_sin_embedding(
-            min_time_steps, C, device=device, max_period=self.max_period
-        )  # [54, 1, C]
-        time_group_pos = rearrange(time_group_pos, 't b c -> b c t 1 1')
-        time_group_pos = time_group_pos.expand(B, C, min_time_steps, self.num_resolutions, tokens_per_group)
-        all_res = all_res + self.weight_pos_embed * time_group_pos
+        # Note: Time group positional embedding removed because each time group is processed
+        # independently (merged into batch dimension), so transformer cannot see temporal relationships
+        # Time information is captured by encoder/decoder convolutions instead
         
         # Flatten to sequence: [B*min_time_steps, num_res*tokens_per_group, C]
         # Transformer expects: [batch, sequence, feature]

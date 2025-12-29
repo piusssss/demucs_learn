@@ -80,8 +80,33 @@ for idx, tenc in enumerate(model.tencoder):
 
 # Transformer parameters
 if model.crosstransformer:
-    transformer_params = sum(p.numel() for p in model.crosstransformer.parameters())
-    print(f"\nTransformer ({t_layers} layers): {transformer_params/1e6:.2f}M")
+    print(f"\n{'='*60}")
+    print(f"Transformer Parameters (Detailed)")
+    print(f"{'='*60}\n")
+    
+    total_transformer_params = 0
+    for layer_idx in range(len(model.crosstransformer.layers)):
+        layer = model.crosstransformer.layers[layer_idx]
+        layer_t = model.crosstransformer.layers_t[layer_idx]
+        
+        is_self_attn = (layer_idx % 2 == model.crosstransformer.classic_parity)
+        
+        layer_params = sum(p.numel() for p in layer.parameters())
+        layer_t_params = sum(p.numel() for p in layer_t.parameters())
+        
+        if is_self_attn:
+            print(f"Layer {layer_idx} (Self-Attention):")
+            print(f"  Freq branch:  {layer_params/1e6:.2f}M")
+            print(f"  Time branch:  {layer_t_params/1e6:.2f}M")
+        else:
+            print(f"Layer {layer_idx} (Cross-Attention):")
+            print(f"  Freq branch:  {layer_params/1e6:.2f}M")
+            print(f"  Time branch:  {layer_t_params/1e6:.2f}M")
+        
+        total_transformer_params += layer_params + layer_t_params
+    
+    print(f"\nTotal Transformer Params: {total_transformer_params/1e6:.2f}M ({total_transformer_params/total_params*100:.1f}%)")
+    transformer_params = total_transformer_params
 else:
     transformer_params = 0
     print(f"\nTransformer: 0.00M (disabled)")
@@ -122,7 +147,7 @@ print(f"{'-'*60}")
 print(f"TOTAL:               {total_params/1e6:.2f}M (100.0%)")
 
 # Create test audio for detailed profiling
-test_duration_detail = 10  # 10 seconds for detailed profiling (avoid OOM)
+test_duration_detail = 180
 test_audio_detail = torch.randn(1, 2, int(samplerate * test_duration_detail))
 if device == "cuda":
     test_audio_detail = test_audio_detail.cuda()
@@ -323,7 +348,10 @@ for idx in range(len(model.encoder)):
     execution_order.append((f'4_encoder_layer_{idx}', f'Encoder Layer {idx} (freq + time)'))
 
 # Transformer
-execution_order.append(('5_transformer', 'Transformer (cross-attention)'))
+if model.crosstransformer:
+    execution_order.append(('5_transformer', 'Transformer (total)'))
+else:
+    execution_order.append(('5_transformer', 'Transformer (disabled)'))
 
 # Decoder layers
 for idx in range(len(model.decoder)):
@@ -354,134 +382,4 @@ print(f"{'TOTAL':<50} {total_time*1000:>10.2f}ms {100.0:>6.1f}%")
 print(f"\n{'='*60}")
 print(f"Total time (for {test_duration_detail}s): {total_time*1000:.2f}ms ({total_time:.2f}s)")
 print(f"Throughput: {test_duration_detail/total_time:.2f}x realtime")
-print(f"Estimated time for 180s: {total_time * 180 / test_duration_detail:.2f}s")
 print(f"{'='*60}\n")
-
-# Summary by major categories
-print(f"\n{'='*60}")
-print(f"Summary by Major Categories")
-print(f"{'='*60}\n")
-
-major_categories = {
-    'STFT': sum(t for k, t in times.items() if '1_stft' in k),
-    'Normalization': sum(t for k, t in times.items() if 'normalize' in k),
-    'Encoder': sum(t for k, t in times.items() if '4_encoder' in k),
-    'Transformer': sum(t for k, t in times.items() if '5_transformer' in k),
-    'Decoder': sum(t for k, t in times.items() if '6_decoder' in k),
-    'Post-processing': sum(t for k, t in times.items() if k.startswith('7_') or k.startswith('8_') or k.startswith('9_') or k.startswith('10_'))
-}
-
-print(f"{'Category':<25} {'Time (s)':<12} {'Time (ms)':<12} {'Percentage':<12}")
-print(f"{'-'*65}")
-for cat, t in sorted(major_categories.items(), key=lambda x: x[1], reverse=True):
-    print(f"{cat:<25} {t:>10.3f}s {t*1000:>10.1f}ms {t/total_time*100:>10.1f}%")
-print(f"{'-'*65}")
-print(f"{'TOTAL':<25} {total_time:>10.3f}s {total_time*1000:>10.1f}ms {100.0:>10.1f}%")
-
-# Store 10s times for later scaling
-times_10s = times.copy()
-total_time_10s = total_time
-
-# Full model test with apply_model (180s)
-print(f"\n{'='*60}")
-print(f"Full Model Test with apply_model (180s audio)")
-print(f"{'='*60}\n")
-
-test_duration_full = 180
-test_audio_full = torch.randn(1, 2, int(samplerate * test_duration_full))
-if device == "cuda":
-    test_audio_full = test_audio_full.cuda()
-
-start_time = time.time()
-with torch.no_grad():
-    separated = apply_model(model, test_audio_full, shifts=1, split=True, overlap=0.25, progress=False)
-if device == "cuda":
-    torch.cuda.synchronize()
-end_time = time.time()
-
-processing_time = end_time - start_time
-real_time_factor = test_duration_full / processing_time
-
-print(f"Processing time: {processing_time:.2f}s for {test_duration_full}s audio")
-print(f"Real-time factor: {real_time_factor:.2f}x")
-print(f"Average time per second: {processing_time/test_duration_full*1000:.2f}ms/s")
-
-# Comparison
-print(f"\n{'='*60}")
-print(f"Comparison")
-print(f"{'='*60}\n")
-
-# Calculate accurate estimation based on actual segments
-segment_length = test_duration_detail  # 10s
-overlap = 0.25
-stride = segment_length * (1 - overlap)  # 7.5s
-num_segments = int(np.ceil((test_duration_full - segment_length) / stride)) + 1
-
-# Estimate merge overhead (empirically ~1-2s for 180s audio)
-merge_overhead = 1.0  # seconds
-
-estimated_time_accurate = (total_time_10s * num_segments) + merge_overhead
-estimated_time_linear = total_time_10s * 180 / test_duration_detail
-
-print(f"Detailed profiling ({test_duration_detail}s): {total_time_10s:.2f}s")
-print(f"\nEstimation methods:")
-print(f"  Linear scaling (naive):        {estimated_time_linear:.2f}s")
-print(f"  Segment-based (accurate):      {estimated_time_accurate:.2f}s")
-print(f"    - Segments to process:       {num_segments}")
-print(f"    - Time per segment:          {total_time_10s:.2f}s")
-print(f"    - Processing time:           {total_time_10s * num_segments:.2f}s")
-print(f"    - Merge overhead:            {merge_overhead:.2f}s")
-print(f"\nActual with apply_model (180s):  {processing_time:.2f}s")
-print(f"\nAccuracy:")
-print(f"  Linear estimate error:         {abs(processing_time - estimated_time_linear):.2f}s ({abs(processing_time - estimated_time_linear)/processing_time*100:.1f}%)")
-print(f"  Accurate estimate error:       {abs(processing_time - estimated_time_accurate):.2f}s ({abs(processing_time - estimated_time_accurate)/processing_time*100:.1f}%)")
-print(f"\nNote: apply_model uses overlap={overlap} (25%), so it processes {num_segments} segments instead of {int(180/test_duration_detail)}.")
-
-# Extrapolate 10s data to 180s for detailed breakdown
-print(f"\n{'='*60}")
-print(f"Extrapolated Breakdown for 180s (Segment-based)")
-print(f"{'='*60}\n")
-
-scale_factor = num_segments  # Use actual number of segments
-
-print(f"{'Step':<50} {'Time (s)':<12} {'%':<8}")
-print(f"{'-'*70}")
-
-for key, description in execution_order:
-    if key in times_10s:
-        t_10s = times_10s[key]
-        t_180s = t_10s * scale_factor
-        percentage = (t_10s / total_time_10s * 100) if total_time_10s > 0 else 0
-        print(f"{description:<50} {t_180s:>10.2f}s {percentage:>6.1f}%")
-
-print(f"{'-'*70}")
-print(f"{'Processing time (estimated)':<50} {total_time_10s * num_segments:>10.2f}s {100.0:>6.1f}%")
-print(f"{'Merge overhead (estimated)':<50} {merge_overhead:>10.2f}s")
-print(f"{'TOTAL (estimated)':<50} {estimated_time_accurate:>10.2f}s")
-
-# Extrapolated major categories for 180s
-print(f"\n{'='*60}")
-print(f"Extrapolated Major Categories for 180s")
-print(f"{'='*60}\n")
-
-major_categories_10s = {
-    'STFT': sum(t for k, t in times_10s.items() if '1_stft' in k),
-    'Normalization': sum(t for k, t in times_10s.items() if 'normalize' in k),
-    'Encoder': sum(t for k, t in times_10s.items() if '4_encoder' in k),
-    'Transformer': sum(t for k, t in times_10s.items() if '5_transformer' in k),
-    'Decoder': sum(t for k, t in times_10s.items() if '6_decoder' in k),
-    'Post-processing': sum(t for k, t in times_10s.items() if k.startswith('7_') or k.startswith('8_') or k.startswith('9_') or k.startswith('10_'))
-}
-
-print(f"{'Category':<25} {'Time (s)':<12} {'Percentage':<12}")
-print(f"{'-'*50}")
-for cat, t_10s in sorted(major_categories_10s.items(), key=lambda x: x[1], reverse=True):
-    t_180s = t_10s * scale_factor
-    print(f"{cat:<25} {t_180s:>10.2f}s {t_10s/total_time_10s*100:>10.1f}%")
-print(f"{'-'*50}")
-processing_time_estimated = total_time_10s * num_segments
-print(f"{'Processing (estimated)':<25} {processing_time_estimated:>10.2f}s {100.0:>10.1f}%")
-print(f"{'Merge overhead':<25} {merge_overhead:>10.2f}s")
-print(f"{'TOTAL (estimated)':<25} {estimated_time_accurate:>10.2f}s")
-print(f"{'ACTUAL (apply_model)':<25} {processing_time:>10.2f}s")
-print(f"{'DIFFERENCE':<25} {abs(processing_time - estimated_time_accurate):>10.2f}s {abs(processing_time - estimated_time_accurate)/processing_time*100:>10.1f}%")

@@ -46,7 +46,7 @@ class HTDemucs_nf(nn.Module):
         dconv_comp=8,
         dconv_init=1e-3,
         # Transformer
-        t_layers=0,
+        t_layers=1,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -186,45 +186,59 @@ class HTDemucs_nf(nn.Module):
         if rescale:
             rescale_module(self, reference=rescale)
 
-        transformer_channels = channels * growth ** (depth - 1)
-
+        
+        # Independent transformers for each band at each layer
+        # Layer 0: 32 transformers, Layer 1: 12 transformers, Layer 2: 4 transformers, Layer 3: 1 transformer
+        self.stft_transformers = nn.ModuleList()
+        self.bands_to_process = [32, 12, 4, 1]  # Number of bands to process at each layer
+        
         if t_layers > 0:
-            self.crosstransformer = CrossTransformerEncoder(
-                dim=transformer_channels,
-                emb=t_emb,
-                hidden_scale=t_hidden_scale,
-                num_heads=t_heads,
-                num_layers=t_layers,
-                cross_first=t_cross_first,
-                dropout=t_dropout,
-                max_positions=t_max_positions,
-                norm_in=t_norm_in,
-                norm_in_group=t_norm_in_group,
-                group_norm=t_group_norm,
-                norm_first=t_norm_first,
-                norm_out=t_norm_out,
-                max_period=t_max_period,
-                weight_decay=t_weight_decay,
-                lr=t_lr,
-                layer_scale=t_layer_scale,
-                gelu=t_gelu,
-                sin_random_shift=t_sin_random_shift,
-                weight_pos_embed=t_weight_pos_embed,
-                cape_mean_normalize=t_cape_mean_normalize,
-                cape_augment=t_cape_augment,
-                cape_glob_loc_scale=t_cape_glob_loc_scale,
-                sparse_self_attn=t_sparse_self_attn,
-                sparse_cross_attn=t_sparse_cross_attn,
-                mask_type=t_mask_type,
-                mask_random_seed=t_mask_random_seed,
-                sparse_attn_window=t_sparse_attn_window,
-                global_window=t_global_window,
-                sparsity=t_sparsity,
-                auto_sparsity=t_auto_sparsity,
-                num_resolutions=self.num_resolutions
-            )
+            for idx in range(depth):
+                transformer_channels = channels * growth ** (idx)
+                num_bands_to_process = self.bands_to_process[idx]
+                
+                # Create independent transformer for each band
+                layer_transformers = nn.ModuleList()
+                for band_idx in range(num_bands_to_process):
+                    transformer = CrossTransformerEncoder(
+                        dim=transformer_channels,
+                        emb=t_emb,
+                        hidden_scale=t_hidden_scale,
+                        num_heads=t_heads,
+                        num_layers=t_layers,
+                        cross_first=t_cross_first,
+                        dropout=t_dropout,
+                        max_positions=t_max_positions,
+                        norm_in=t_norm_in,
+                        norm_in_group=t_norm_in_group,
+                        group_norm=t_group_norm,
+                        norm_first=t_norm_first,
+                        norm_out=t_norm_out,
+                        max_period=t_max_period,
+                        weight_decay=t_weight_decay,
+                        lr=t_lr,
+                        layer_scale=t_layer_scale,
+                        gelu=t_gelu,
+                        sin_random_shift=t_sin_random_shift,
+                        weight_pos_embed=t_weight_pos_embed,
+                        cape_mean_normalize=t_cape_mean_normalize,
+                        cape_augment=t_cape_augment,
+                        cape_glob_loc_scale=t_cape_glob_loc_scale,
+                        sparse_self_attn=t_sparse_self_attn,
+                        sparse_cross_attn=t_sparse_cross_attn,
+                        mask_type=t_mask_type,
+                        mask_random_seed=t_mask_random_seed,
+                        sparse_attn_window=t_sparse_attn_window,
+                        global_window=t_global_window,
+                        sparsity=t_sparsity,
+                        auto_sparsity=t_auto_sparsity,
+                        num_resolutions=self.num_resolutions
+                    )
+                    layer_transformers.append(transformer)
+                
+                self.stft_transformers.append(layer_transformers)
         else:
-            self.crosstransformer = None
+            self.stft_transformers = None
             
     def _spec(self, x, nfft=None, hop_length=None):
         hl = hop_length
@@ -349,9 +363,43 @@ class HTDemucs_nf(nn.Module):
             for res_idx in range(self.num_resolutions):
                 saved_list[res_idx].append(x_list[res_idx])
         
-        # Multi-resolution cross-attention at bottleneck (after all encoders)
-        if self.crosstransformer:
-            x_list = self.crosstransformer(x_list)
+            # Multi-resolution cross-attention at bottleneck (after all encoders)
+            if self.stft_transformers:
+                num_bands = [64, 16, 4, 1][idx]
+                num_bands_to_process = self.bands_to_process[idx]
+                
+                if num_bands == 1:
+                    # No split, use the single transformer (band_idx=0)
+                    x_list = self.stft_transformers[idx][0](x_list)
+                else:
+                    # Split each resolution's frequency bins evenly into num_bands
+                    x_list_output = [x.clone() for x in x_list]  # Clone to preserve skipped bands
+                    
+                    for band_idx in range(num_bands_to_process):
+                        # Extract this band from each resolution
+                        band_list = []
+                        for res_idx, x in enumerate(x_list):
+                            B, C, Fr, T = x.shape
+                            bins_per_band = Fr // num_bands
+                            start_bin = band_idx * bins_per_band
+                            end_bin = (band_idx + 1) * bins_per_band if band_idx < num_bands - 1 else Fr
+                            
+                            band = x[:, :, start_bin:end_bin, :]
+                            band_list.append(band)
+                        
+                        # Apply THIS BAND'S transformer (independent for each band)
+                        band_list = self.stft_transformers[idx][band_idx](band_list)
+                        
+                        # Put processed band back to output
+                        for res_idx in range(self.num_resolutions):
+                            B, C, Fr, T = x_list[res_idx].shape
+                            bins_per_band = Fr // num_bands
+                            start_bin = band_idx * bins_per_band
+                            end_bin = (band_idx + 1) * bins_per_band if band_idx < num_bands - 1 else Fr
+                            x_list_output[res_idx][:, :, start_bin:end_bin, :] = band_list[res_idx]
+                    
+                    x_list = x_list_output
+                    x_list = x_list_output
             
         # Decode all resolutions in parallel
         for idx in range(self.depth):

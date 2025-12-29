@@ -14,54 +14,8 @@ from .demucs import rescale_module
 from .states import capture_init
 from .spec import spectro, ispectro
 from .hdemucs import pad1d, ScaledEmbedding, HEncLayer, HDecLayer
-
-class NanoFusionHead(nn.Module):
-    def __init__(self, num_branches, sources, audio_channels, hidden_channels=32):
-        super().__init__()
-        input_dim = num_branches * sources * audio_channels
-        output_dim = sources * audio_channels
-        hidden_channels = input_dim * 4
-
-        self.refiner = nn.Sequential(
-            # Layer 1: 升维 + 局部感知 (Kernel=9)
-            nn.Conv1d(input_dim, hidden_channels, kernel_size=5, padding=2,groups=sources),
-            nn.GELU(),
-            nn.Conv1d(hidden_channels, hidden_channels, kernel_size=1,groups=sources),
-            nn.GELU(),
-            nn.Conv1d(hidden_channels, output_dim, kernel_size=3, padding=1,groups=sources)
-        )
-        
-        
-        self.gate = nn.Sequential(
-            nn.Conv1d(output_dim, hidden_channels, kernel_size=3, padding=1,groups=sources),
-            nn.Conv1d(hidden_channels, output_dim, kernel_size=3, padding=1,groups=sources),
-            nn.Sigmoid()
-        )
-
-        nn.init.constant_(self.gate[0].bias, -2.0)
-
-
-    def forward(self, x_list, xt_ref):
-
-        all_signals = x_list
-        B, S, C, T = xt_ref.shape
-        N = len(all_signals)
-        
-        stack = torch.stack(all_signals, dim=1)  # [B, N, S, C, T]
-
-        stack = stack.permute(0, 2, 1, 3, 4)     # [B, S, N, C, T]
-        stack = stack.reshape(B, S * N * C, T)   # [B, (S*N*C), T]
-        
-        correction = self.refiner(stack)  
-        gate = self.gate(correction).view(B, S, C, T)
-        correction = correction.view(B, S, C, T)   
-
-        out = xt_ref + gate * correction
-        
-        return out
     
-    
-class HTDemucs_2nns(nn.Module):
+class HTDemucs_x(nn.Module):
 
     @capture_init
     def __init__(
@@ -70,7 +24,7 @@ class HTDemucs_2nns(nn.Module):
         # Channels
         audio_channels=2,
         channels=32,
-        channels_time=48,
+        channels_time=None,
         growth=2,
         # STFT
         nfft_list=[2048,4096,8192],  # Multi-resolution STFT window sizes
@@ -105,7 +59,7 @@ class HTDemucs_2nns(nn.Module):
         t_layers=2,
         t_emb="sin",
         t_hidden_scale=4.0,
-        t_heads=8,
+        t_heads=4,
         t_dropout=0.0,
         t_max_positions=10000,
         t_norm_in=True,
@@ -152,7 +106,6 @@ class HTDemucs_2nns(nn.Module):
         self.depth = depth
         self.bottom_channels = bottom_channels
         self.channels = channels
-        self.channels_time = channels_time
         self.samplerate = samplerate
         self.segment = segment
         self.use_train_segment = use_train_segment
@@ -171,16 +124,10 @@ class HTDemucs_2nns(nn.Module):
         self.encoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
         self.decoders = nn.ModuleList([nn.ModuleList() for _ in range(self.num_resolutions)])
 
-        self.tencoder = nn.ModuleList()
-        self.tdecoder = nn.ModuleList()
-
-        self.fusion = NanoFusionHead(
-            num_branches=self.num_resolutions,
-            sources=len(sources),
-            audio_channels=audio_channels,
-            hidden_channels=channels # 使用模型的主通道数作为隐藏层基准
+        # Source-specific fusion weights for final time-domain fusion
+        self.final_fusion_weights = nn.Parameter(
+            torch.zeros(len(self.sources), self.num_resolutions) # init 0 -> sigmoid 0.5
         )
-        
         chin = audio_channels
         chin_z = chin  # number of channels for the freq branch
         if self.cac:
@@ -210,12 +157,6 @@ class HTDemucs_2nns(nn.Module):
                     "gelu": True,
                 },
             }
-            kwt = dict(kw)
-            kwt["freq"] = 0
-            kwt["kernel_size"] = kernel_size
-            kwt["stride"] = stride
-            kwt["pad"] = True
-            kw_dec = dict(kw)
 
             # Create encoders for each resolution (dynamic)
             for res_idx in range(self.num_resolutions):
@@ -223,16 +164,6 @@ class HTDemucs_2nns(nn.Module):
                     chin_z, chout_z, dconv=dconv_mode & 1, context=context_enc, **kw
                 )
                 self.encoders[res_idx].append(enc)
-            
-            if freq:
-                tenc = HEncLayer(
-                    chin,
-                    chout,
-                    dconv=dconv_mode & 1,
-                    context=context_enc,
-                    **kwt
-                )
-                self.tencoder.append(tenc)
             
             if index == 0:
                 chin = self.audio_channels * len(self.sources)
@@ -251,17 +182,6 @@ class HTDemucs_2nns(nn.Module):
                     **kw_dec
                 )
                 self.decoders[res_idx].insert(0, dec)
-            
-            if freq:
-                tdec = HDecLayer(
-                    chout,
-                    chin,
-                    dconv=dconv_mode & 2,
-                    last=index == 0,
-                    context=context,
-                    **kwt
-                )
-                self.tdecoder.insert(0, tdec)
 
             chin = chout
             chin_z = chout_z
@@ -284,13 +204,6 @@ class HTDemucs_2nns(nn.Module):
             rescale_module(self, reference=rescale)
 
         transformer_channels = channels * growth ** (depth - 1)
-        if channels_time:
-            self.channel_upsampler_t = nn.Conv1d(
-                channels_time * growth ** (depth - 1), transformer_channels, 1
-            )
-            self.channel_downsampler_t = nn.Conv1d(
-                transformer_channels, channels_time * growth ** (depth - 1), 1
-            )
 
         self.unit_transformers = nn.ModuleList()
         # Create separate self-attention transformers for each resolution and time domain
@@ -337,25 +250,20 @@ class HTDemucs_2nns(nn.Module):
                     SingleCrossTransformerEncoder(freq=True, cross_first=False, num_layers = 1, **kwtran)
                 )
             
-            self.time_self_transformer = SingleCrossTransformerEncoder(
-                freq=False, cross_first=False, num_layers = 1, **kwtran
-            )    
-            
             kwtran["skip"] = True
-            self.time_to_concatfreq_cross_transformers = ConcatCrossTransformerEncoder(
+            self.mid_to_concatfreq_cross_transformers = ConcatCrossTransformerEncoder(
                 cross=True, num_resolutions=self.num_resolutions, num_layers = 1, **kwtran 
             )
             
-            self.freq_to_time_cross_transformers = nn.ModuleList()
+            self.freq_to_mid_cross_transformers = nn.ModuleList()
             for res_idx in range(self.num_resolutions):
-                self.freq_to_time_cross_transformers.append(
+                self.freq_to_mid_cross_transformers.append(
                     SingleCrossTransformerEncoder(freq=True, cross_first=True, num_layers = 1, **kwtran)
                 )
             
             self.block_transformers.append(self.freq_self_transformers)
-            self.block_transformers.append(self.time_self_transformer)
-            self.block_transformers.append(self.time_to_concatfreq_cross_transformers)
-            self.block_transformers.append(self.freq_to_time_cross_transformers)
+            self.block_transformers.append(self.mid_to_concatfreq_cross_transformers)
+            self.block_transformers.append(self.freq_to_mid_cross_transformers)
             
             if idx == t_layers-1:
                 self.freq_self_transformers = nn.ModuleList()
@@ -363,32 +271,15 @@ class HTDemucs_2nns(nn.Module):
                     self.freq_self_transformers.append(
                         SingleCrossTransformerEncoder(freq=True, cross_first=False, num_layers = 1, **kwtran)
                     )
-                
-                self.time_self_transformer = SingleCrossTransformerEncoder(
-                    freq=False, cross_first=False, num_layers = 1, **kwtran
-                )
                 self.block_transformers.append(self.freq_self_transformers)
-                self.block_transformers.append(self.time_self_transformer)
                 
             self.unit_transformers.append(self.block_transformers)
             
         if t_layers == 0:
             self.unit_transformers = None
-            self.time_to_concatfreq_cross_transformers = None
-            self.freq_to_time_cross_transformers = None
-            self.freq_self_transformers = None
-            self.time_self_transformer = None
 
     def _spec(self, x, nfft=None, hop_length=None):
         hl = hop_length
-
-        # We re-pad the signal in order to keep the property
-        # that the size of the output is exactly the size of the input
-        # divided by the stride (here hop_length), when divisible.
-        # This is achieved by padding by 1/4th of the kernel size (here nfft).
-        # which is not supported by torch.stft.
-        # Having all convolution operations follow this convention allow to easily
-        # align the time and frequency branches later on.
         assert hl == nfft // 2
         le = int(math.ceil(x.shape[-1] / hl))
         pad = hl
@@ -416,65 +307,16 @@ class HTDemucs_2nns(nn.Module):
             B, C, Fr, T = z.shape
             m = torch.view_as_real(z).permute(0, 1, 4, 2, 3)
             m = m.reshape(B, C * 2, Fr, T)
-        else:
-            m = z.abs()
-        return m
 
     def _mask(self, z, m):
-        # Apply masking given the mixture spectrogram `z` and the estimated mask `m`.
-        # If `cac` is True, `m` is actually a full spectrogram and `z` is ignored.
-        niters = self.wiener_iters
+
         if self.cac:
             B, S, C, Fr, T = m.shape
             out = m.view(B, S, -1, 2, Fr, T).permute(0, 1, 2, 4, 5, 3)
             out = torch.view_as_complex(out.contiguous())
             return out
-        if self.training:
-            niters = self.end_iters
-        if niters < 0:
-            z = z[:, None]
-            return z / (1e-8 + z.abs()) * m
-        else:
-            return self._wiener(m, z, niters)
-
-    def _wiener(self, mag_out, mix_stft, niters):
-        # apply wiener filtering from OpenUnmix.
-        init = mix_stft.dtype
-        wiener_win_len = 300
-        residual = self.wiener_residual
-
-        B, S, C, Fq, T = mag_out.shape
-        mag_out = mag_out.permute(0, 4, 3, 2, 1)
-        mix_stft = torch.view_as_real(mix_stft.permute(0, 3, 2, 1))
-
-        outs = []
-        for sample in range(B):
-            pos = 0
-            out = []
-            for pos in range(0, T, wiener_win_len):
-                frame = slice(pos, pos + wiener_win_len)
-                z_out = wiener(
-                    mag_out[sample, frame],
-                    mix_stft[sample, frame],
-                    niters,
-                    residual=residual,
-                )
-                out.append(z_out.transpose(-1, -2))
-            outs.append(torch.cat(out, dim=0))
-        out = torch.view_as_complex(torch.stack(outs, 0))
-        out = out.permute(0, 4, 3, 2, 1).contiguous()
-        if residual:
-            out = out[:, :-1]
-        assert list(out.shape) == [B, S, C, Fq, T]
-        return out.to(init)
 
     def valid_length(self, length: int):
-        """
-        Return a length that is appropriate for evaluation.
-        In our case, always return the training length, unless
-        it is smaller than the given length, in which case this
-        raises an error.
-        """
         if not self.use_train_segment:
             return length
         training_length = int(self.segment * self.samplerate)
@@ -522,17 +364,9 @@ class HTDemucs_2nns(nn.Module):
             std_list.append(std)
             x_list.append(x)
 
-        # Prepare the time branch input.
-        xt = mix
-        meant = xt.mean(dim=(1, 2), keepdim=True)
-        stdt = xt.std(dim=(1, 2), keepdim=True)
-        xt = (xt - meant) / (1e-5 + stdt)
-
         # Multi-resolution skip connections and lengths (dynamic)
         saved_list = [[] for _ in range(self.num_resolutions)]
         lengths_list = [[] for _ in range(self.num_resolutions)]
-        saved_t = []  # skip connections, time branch (shared)
-        lengths_t = []  # saved lengths for time branch (shared)
         
         for idx in range(self.depth):
             # Save lengths for each resolution
@@ -540,10 +374,6 @@ class HTDemucs_2nns(nn.Module):
                 lengths_list[res_idx].append(x_list[res_idx].shape[-1])
             
             inject = None
-            lengths_t.append(xt.shape[-1])
-            tenc = self.tencoder[idx]
-            xt = tenc(xt)
-            saved_t.append(xt)
             
             # Encode all resolutions in parallel
             for res_idx in range(self.num_resolutions):
@@ -560,17 +390,12 @@ class HTDemucs_2nns(nn.Module):
                 saved_list[res_idx].append(x_list[res_idx])
         
         if self.unit_transformers is not None:
-            if self.channels_time:
-                xt = self.channel_upsampler_t(xt)
-                
+            
             # Transformer processing (Transformation)
             for idx in range(self.t_layers):
                 # Step 1: Self-Refinement - Freq自注意
                 for res_idx in range(self.num_resolutions):
                     x_list[res_idx], _ = self.unit_transformers[idx][0][res_idx](x_list[res_idx], xt)
-                
-                # Step 2: Self-Refinement - Time自注意
-                _, xt = self.unit_transformers[idx][1](x_list[0], xt)
             
                 # Step 3: Aggregation - Time看concat的Freq
                 _, xt = self.unit_transformers[idx][2](x_list, xt)
@@ -589,9 +414,6 @@ class HTDemucs_2nns(nn.Module):
                     # Step 6: Self-Refinement - Time自注意
                     _, xt = self.unit_transformers[idx][5](x_list[0], xt)
                     
-            if self.channels_time:
-                xt = self.channel_downsampler_t(xt)
-                    
                     
         for idx in range(self.depth):
             # Decode all resolutions in parallel
@@ -600,18 +422,11 @@ class HTDemucs_2nns(nn.Module):
                 target_len = lengths_list[res_idx].pop(-1)
                 x_list[res_idx], _ = self.decoders[res_idx][idx](x_list[res_idx], skip, target_len)
 
-            # Time domain decoder (shared across resolutions)
-            tdec = self.tdecoder[idx]
-            length_t = lengths_t.pop(-1)
-            skip = saved_t.pop(-1)
-            xt, _ = tdec(xt, skip, length_t)
             
         # Verify all skip connections are used
         for res_idx in range(self.num_resolutions):
             assert len(saved_list[res_idx]) == 0
             assert len(lengths_list[res_idx]) == 0
-        assert len(lengths_t) == 0
-        assert len(saved_t) == 0
 
         S = len(self.sources)
         
@@ -651,17 +466,17 @@ class HTDemucs_2nns(nn.Module):
         if x_is_mps:
             x_time_list = [x.to("mps") for x in x_time_list]
 
-        # Time domain branch processing
-        if self.use_train_segment:
-            if self.training:
-                xt = xt.view(B, S, -1, length)
-            else:
-                xt = xt.view(B, S, -1, training_length)
-        else:
-            xt = xt.view(B, S, -1, length)
-        xt = xt * stdt[:, None] + meant[:, None]
         
-        x = self.fusion(x_time_list, xt)
+        final_weights = torch.sigmoid(self.final_fusion_weights)
+            
+        # Initialize output
+        B, S, C, T = x_time_list[0].shape
+        x = torch.zeros_like(x_time_list[0])
+        
+        # Apply source-specific weights
+        for s in range(S):
+            for r in range(self.num_resolutions):
+                x[:, s] += weights[s, r] * x_time_list[r][:, s]
         
         if length_pre_pad:
             x = x[..., :length_pre_pad]

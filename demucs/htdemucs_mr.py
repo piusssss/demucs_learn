@@ -162,11 +162,11 @@ class HTDemucs_mr(nn.Module):
         channels_time=None,
         growth=2,
         # STFT
-        nfft_list=[2048,4096,8192],  # Multi-resolution STFT window sizes 
+        nfft_list=[1024,2048,4096,8192,16384],  # Multi-resolution STFT window sizes 
         cac=True,
         # Main structure
-        depth=4,
-        independent=2,
+        depth=5,
+        independent=1,
         rewrite=True,
         # Frequency branch
         freq_emb=0.5,
@@ -182,7 +182,7 @@ class HTDemucs_mr(nn.Module):
         context=1,
         context_enc=0,
         # Normalization
-        norm_starts=4,
+        norm_starts=5,
         norm_groups=4,
         # DConv residual branch
         dconv_mode=1,
@@ -190,7 +190,7 @@ class HTDemucs_mr(nn.Module):
         dconv_comp=8,
         dconv_init=1e-3,
         # Transformer
-        t_layers=5,
+        t_layers=0,
         t_emb="sin",
         t_hidden_scale=4.0,
         t_heads=8,
@@ -244,7 +244,7 @@ class HTDemucs_mr(nn.Module):
         # Multi-resolution window sizes
         self.nfft_list = nfft_list
         self.num_resolutions = len(nfft_list)
-        self.hop_lengths = [nfft // 2 for nfft in nfft_list]
+        self.hop_lengths = [nfft for nfft in nfft_list]  # 矩形窗无重叠: hop = nfft
 
         self.encoder = nn.ModuleList()
         self.decoder = nn.ModuleList()
@@ -452,32 +452,67 @@ class HTDemucs_mr(nn.Module):
             self.crosstransformer = None
             
     def _spec(self, x, nfft=None, hop_length=None):
-        hl = hop_length
-
-        # We re-pad the signal in order to keep the property
-        # that the size of the output is exactly the size of the input
-        # divided by the stride (here hop_length), when divisible.
-        # This is achieved by padding by 1/4th of the kernel size (here nfft).
-        # which is not supported by torch.stft.
-        # Having all convolution operations follow this convention allow to easily
-        # align the time and frequency branches later on.
-        assert hl == nfft // 2
+        # 矩形窗、无重叠 STFT
+        hl = nfft  # 无重叠：hop = nfft
+        
         le = int(math.ceil(x.shape[-1] / hl))
         pad = hl
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
-
-        z = spectro(x, nfft, hl)[..., :-1, :]
+        
+        # 使用矩形窗的 STFT（手动实现，因为 spectro 用的是汉明窗）
+        *other, length = x.shape
+        x_flat = x.reshape(-1, length)
+        
+        window = torch.ones(nfft, device=x_flat.device, dtype=x_flat.dtype)
+        
+        z = torch.stft(
+            x_flat,
+            n_fft=nfft,
+            hop_length=hl,
+            window=window,
+            win_length=nfft,
+            normalized=True,
+            center=True,
+            return_complex=True,
+            pad_mode='reflect'
+        )
+        
+        _, freqs, frames = z.shape
+        z = z.view(*other, freqs, frames)
+        
+        z = z[..., :-1, :]
         assert z.shape[-1] == le + 3, (z.shape, x.shape, le)
         z = z[..., 1: 1 + le]
         return z
 
     def _ispec(self, z, length=None, scale=0, hop_length=None):
+        # 矩形窗、无重叠 iSTFT
         hl = hop_length // (2**scale)
         z = F.pad(z, (0, 0, 0, 1))
         z = F.pad(z, (1, 2))
         pad = hl
         le = hl * int(math.ceil(length / hl)) + 2 * pad
-        x = ispectro(z, hl, length=le)
+        
+        # 使用矩形窗的 iSTFT（手动实现，因为 ispectro 用的是汉明窗）
+        *other, freqs, frames = z.shape
+        nfft = 2 * freqs - 2
+        z_flat = z.view(-1, freqs, frames)
+        
+        window = torch.ones(nfft, device=z_flat.device, dtype=torch.float32)
+        
+        x = torch.istft(
+            z_flat,
+            n_fft=nfft,
+            hop_length=hl,
+            window=window,
+            win_length=nfft,
+            normalized=True,
+            center=True,
+            length=le
+        )
+        
+        _, length_out = x.shape
+        x = x.view(*other, length_out)
         x = x[..., pad: pad + length]
         return x
 
@@ -560,7 +595,7 @@ class HTDemucs_mr(nn.Module):
             aligned_windows = create_sliding_windows(x_list, self.resolutions_merge_size)
         else:
             aligned_windows = create_sliding_windows(x_list, 1)
-        # print(f"[INIT] After create_sliding_windows: {len(aligned_windows)} windows, shapes: {[w.shape for w in aligned_windows]}")
+        #print(f"[INIT] After create_sliding_windows: {len(aligned_windows)} windows, shapes: {[w.shape for w in aligned_windows]}")
         
         # Multi-resolution skip connections and lengths
         saved = []
@@ -571,10 +606,10 @@ class HTDemucs_mr(nn.Module):
         saved_shapes.append(out_shapes)
         
         for idx, encode in enumerate(self.encoder):
-            # print(f"\n[ENC-{idx}] === START ===")
-            # print(f"[ENC-{idx}] Input: {len(aligned_windows)} windows")
-            # for i, w in enumerate(aligned_windows):
-            #     print(f"[ENC-{idx}] Input window {i}: {w.shape}")
+            #print(f"\n[ENC-{idx}] === START ===")
+            #print(f"[ENC-{idx}] Input: {len(aligned_windows)} windows")
+            #for i, w in enumerate(aligned_windows):
+            #    print(f"[ENC-{idx}] Input window {i}: {w.shape}")
             
             # Time branch encoder
             inject = None
@@ -596,7 +631,7 @@ class HTDemucs_mr(nn.Module):
                 else:
                     x_encoded = encode[window_idx](x, inject)
                 
-                # print(f"[ENC-{idx}] Window {window_idx} after encode: {x_encoded.shape}")
+                #print(f"[ENC-{idx}] Window {window_idx} after encode: {x_encoded.shape}")
                 
                 if idx == 0 and self.freq_emb is not None:
                     # add frequency embedding

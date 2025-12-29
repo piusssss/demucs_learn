@@ -22,6 +22,7 @@ from demucs.htdemucs_nf import HTDemucs_nf
 from demucs.htdemucs_dnf import HTDemucs_dnf
 from demucs.htdemucs_dn import HTDemucs_dn
 from demucs.htdemucs_mr import HTDemucs_mr
+from demucs.htdemucs_x import HTDemucs_x
 from thop import profile
 
 # Model parameters (these should match your model's __init__ parameters) 
